@@ -25,5 +25,5 @@ docker run -it \
     --privileged \
     --network=host \
     --name="turtlebot_mpcc_test" \
-    ros2_mpcc_turtlebot \
+    ros2_mpcc \
     /bin/bash

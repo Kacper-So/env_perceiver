@@ -13,7 +13,7 @@ XAUTH=/tmp/.docker.xauth
      chmod a+r $XAUTH
  fi
 
-docker stop turtlebot_mpcc_test || true && docker rm turtlebot_mpcc_test || true
+docker stop mpcc || true && docker rm mpcc || true
 
 docker run -it \
     --workdir="/workspace" \
@@ -24,6 +24,6 @@ docker run -it \
     --volume="$XAUTH:$XAUTH" \
     --privileged \
     --network=host \
-    --name="turtlebot_mpcc_test" \
+    --name="mpcc" \
     ros2_mpcc \
     /bin/bash

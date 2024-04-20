@@ -41,15 +41,22 @@ private:
     float map_width_;
 
     void occupancyMapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr occupancy_map_msg) {
+        RCLCPP_INFO(this->get_logger(), "Received occupancy map");
+        
         OG = *occupancy_map_msg;
         map_origin_x_ = occupancy_map_msg->info.origin.position.x;
         map_origin_y_ = occupancy_map_msg->info.origin.position.y;
         map_resolution_ = occupancy_map_msg->info.resolution;
         map_width_ = occupancy_map_msg->info.width;
+        RCLCPP_INFO(this->get_logger(), "Map Origin: (%f, %f)", map_origin_x_, map_origin_y_);
+        RCLCPP_INFO(this->get_logger(), "Map Resolution: %f", map_resolution_);
+        RCLCPP_INFO(this->get_logger(), "Map Width: %f", map_width_);
     }
 
 
     void lidarCallback(const sensor_msgs::msg::LaserScan::SharedPtr lidar_msg) {
+        RCLCPP_INFO(this->get_logger(), "Received LiDAR data");
+        
         // Process LiDAR data
         // Convert sensor_msgs::msg::LaserScan to vector of points
         std::vector<std::pair<double, double>> points;
@@ -58,12 +65,15 @@ private:
             double y = lidar_msg->range_min * sin(angle);
             points.push_back({x, y});
         }
+        RCLCPP_INFO(this->get_logger(), "Number of LiDAR Points: %zu", points.size());
 
         // Transform LiDAR points to map frame
         std::vector<std::pair<double, double>> transformed_points = transformLidarPoints(points, curr_odometry);
+        RCLCPP_INFO(this->get_logger(), "Number of Transformed Points: %zu", transformed_points.size());
 
         // Perform clustering using DBSCAN
         std::vector<std::vector<std::pair<double, double>>> clusters = fbscan(transformed_points);
+        RCLCPP_INFO(this->get_logger(), "Number of Clusters: %zu", clusters.size());
 
         // Update occupancy grid with clustered LiDAR data
         updated_OG = OG;
@@ -79,14 +89,19 @@ private:
 
         // Publish the updated occupancy map
         updated_occupancy_map_publisher_->publish(updated_OG);
+        RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
     }
     
     void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg) {
+        RCLCPP_INFO(this->get_logger(), "Received odometry data");
+        
         curr_odometry = *odometry_msg;
     }
 
     // Implement DBSCAN clustering algorithm
     std::vector<std::vector<std::pair<double, double>>> fbscan(const std::vector<std::pair<double, double>>& points) {
+        RCLCPP_INFO(this->get_logger(), "Performing clustering using DBSCAN");
+        
         std::vector<std::vector<std::pair<double, double>>> clusters;
         std::vector<bool> visited(points.size(), false);
         std::vector<int> cluster(points.size(), -1);
@@ -123,6 +138,7 @@ private:
         }
 
         return clusters;
+        RCLCPP_INFO(this->get_logger(), "Done clustering using DBSCAN");
     }
 
     std::vector<size_t> regionQuery(const std::vector<std::pair<double, double>>& points, size_t index) {
@@ -141,6 +157,8 @@ private:
 
     std::vector<std::pair<double, double>> transformLidarPoints(const std::vector<std::pair<double, double>>& lidar_points,
                                                                 const nav_msgs::msg::Odometry odometry_msg) {
+        RCLCPP_INFO(this->get_logger(), "Transforming LiDAR points to map frame");
+        
         // Initialize transformed points vector
         std::vector<std::pair<double, double>> transformed_points;
 

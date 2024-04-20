@@ -31,7 +31,7 @@ public:
     }
 
 private:
-    nav_msgs::msg::OccupancyGrid OG = NULL;
+    nav_msgs::msg::OccupancyGrid* OG = nullptr;
     nav_msgs::msg::OccupancyGrid updated_OG;
     nav_msgs::msg::Odometry curr_odometry;
     double epsilon_;
@@ -44,7 +44,7 @@ private:
     void occupancyMapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr occupancy_map_msg) {
         RCLCPP_INFO(this->get_logger(), "Received occupancy map");
         
-        OG = *occupancy_map_msg;
+        OG = &(*occupancy_map_msg);
         map_origin_x_ = occupancy_map_msg->info.origin.position.x;
         map_origin_y_ = occupancy_map_msg->info.origin.position.y;
         map_resolution_ = occupancy_map_msg->info.resolution;
@@ -57,7 +57,7 @@ private:
 
     void lidarCallback(const sensor_msgs::msg::LaserScan::SharedPtr lidar_msg) {
         RCLCPP_INFO(this->get_logger(), "Received LiDAR data");
-        if(OG != NULL){
+        if(OG != nullptr){
             // Process LiDAR data
             // Convert sensor_msgs::msg::LaserScan to vector of points
             std::vector<std::pair<double, double>> points;
@@ -77,7 +77,7 @@ private:
             RCLCPP_INFO(this->get_logger(), "Number of Clusters: %zu", clusters.size());
 
             // Update occupancy grid with clustered LiDAR data
-            updated_OG = OG;
+            updated_OG = *OG;
             for (const auto& cluster : clusters) {
                 for (const auto& point : cluster) {
                     // Convert point to grid cell coordinates

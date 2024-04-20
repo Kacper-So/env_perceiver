@@ -30,7 +30,6 @@ public:
 
 private:
     nav_msgs::msg::OccupancyGrid::SharedPtr OG;
-    nav_msgs::msg::OccupancyGrid updated_OG;
     nav_msgs::msg::Odometry::SharedPtr curr_odometry;
     double epsilon_;
     int min_points_;
@@ -56,16 +55,20 @@ private:
     void lidarCallback(const sensor_msgs::msg::LaserScan::SharedPtr lidar_msg) {
         RCLCPP_INFO(this->get_logger(), "Received LiDAR data");
 
-        if (!OG) {
-            RCLCPP_INFO(this->get_logger(), "Occupancy grid not received yet");
+        if (!OG || !curr_odometry) {
+            RCLCPP_INFO(this->get_logger(), "Occupancy grid or odometry not received yet");
             return;
         }
 
         // Process LiDAR data
         std::vector<std::pair<double, double>> points;
-        for (float angle = lidar_msg->angle_min; angle < lidar_msg->angle_max; angle += lidar_msg->angle_increment) {
-            double x = lidar_msg->range_min * cos(angle);
-            double y = lidar_msg->range_min * sin(angle);
+        for (size_t i = 0; i < lidar_msg->ranges.size(); ++i) {
+            double angle = lidar_msg->angle_min + i * lidar_msg->angle_increment;
+            double range = lidar_msg->ranges[i];
+            if (range < lidar_msg->range_min || range > lidar_msg->range_max)
+                continue; // Skip invalid range
+            double x = range * cos(angle);
+            double y = range * sin(angle);
             points.push_back({x, y});
         }
         RCLCPP_INFO(this->get_logger(), "Number of LiDAR Points: %zu", points.size());
@@ -79,7 +82,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "Number of Clusters: %zu", clusters.size());
 
         // Update occupancy grid with clustered LiDAR data
-        updated_OG = *OG;
+        nav_msgs::msg::OccupancyGrid updated_OG = *OG;
         for (const auto& cluster : clusters) {
             for (const auto& point : cluster) {
                 // Convert point to grid cell coordinates

@@ -103,6 +103,17 @@ private:
                 int index = grid_y * OG->info.width + grid_x;
                 if (OG->data[index] < 100)
                     OG->data[index] += increase_probability_; // Increase probability (up to 100)
+                else
+                    OG->data[index] = 100; // Ensure it doesn't exceed 100
+            }
+        }
+
+        // Decrease probability for other cells
+        for (int i = 0; i < OG->info.width * OG->info.height; ++i) {
+            if (OG->data[i] > 0) {
+                OG->data[i] -= decrease_probability_; // Decrease probability
+                if (OG->data[i] < 0)
+                    OG->data[i] = 0; // Ensure it doesn't go below 0
             }
         }
 

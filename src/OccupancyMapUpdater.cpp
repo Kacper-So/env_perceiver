@@ -26,6 +26,8 @@ public:
 
         epsilon_ = 0.2;  // Adjust epsilon according to your LiDAR sensor's resolution
         min_points_ = 5;  // Adjust min_points as needed
+        increase_probability_ = 5; // Adjust probability increments as needed
+        decrease_probability_ = 5; // Adjust probability decrements as needed
     }
 
 private:
@@ -33,6 +35,8 @@ private:
     nav_msgs::msg::Odometry::SharedPtr curr_odometry;
     double epsilon_;
     int min_points_;
+    int increase_probability_;
+    int decrease_probability_;
     float map_origin_x_;
     float map_origin_y_;
     float map_resolution_;
@@ -77,27 +81,8 @@ private:
         std::vector<std::pair<double, double>> transformed_points = transformLidarPoints(points, *curr_odometry);
         RCLCPP_INFO(this->get_logger(), "Number of Transformed Points: %zu", transformed_points.size());
 
-        // Perform clustering using DBSCAN
-        std::vector<std::vector<std::pair<double, double>>> clusters = fbscan(transformed_points);
-        RCLCPP_INFO(this->get_logger(), "Number of Clusters: %zu", clusters.size());
-
-        // Update occupancy grid with clustered LiDAR data
-        nav_msgs::msg::OccupancyGrid updated_OG = *OG;
-        for (const auto& cluster : clusters) {
-            for (const auto& point : cluster) {
-                // Convert point to grid cell coordinates
-                int grid_x = static_cast<int>((point.first - map_origin_x_) / map_resolution_);
-                int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
-
-                if (grid_x >= 0 && grid_x < map_width_ && grid_y >= 0 && grid_y < updated_OG.info.height) {
-                    updated_OG.data[grid_y * map_width_ + grid_x] = 100; // Occupied cell
-                }
-            }
-        }
-
-        // Publish the updated occupancy map
-        updated_occupancy_map_publisher_->publish(updated_OG);
-        RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
+        // Update occupancy grid with LiDAR data
+        updateOccupancyGrid(transformed_points);
     }
 
     void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg) {
@@ -106,60 +91,24 @@ private:
         curr_odometry = odometry_msg;
     }
 
-    std::vector<std::vector<std::pair<double, double>>> fbscan(const std::vector<std::pair<double, double>>& points) {
-        RCLCPP_INFO(this->get_logger(), "Performing clustering using DBSCAN");
+    void updateOccupancyGrid(const std::vector<std::pair<double, double>>& points) {
+        // Update occupancy grid with LiDAR points
+        for (const auto& point : points) {
+            // Convert point to grid cell coordinates
+            int grid_x = static_cast<int>((point.first - map_origin_x_) / map_resolution_);
+            int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
 
-        std::vector<std::vector<std::pair<double, double>>> clusters;
-        std::vector<bool> visited(points.size(), false);
-        std::vector<int> cluster(points.size(), -1);
-        int current_cluster = 0;
-
-        for (size_t i = 0; i < points.size(); ++i) {
-            if (!visited[i]) {
-                visited[i] = true;
-                std::vector<size_t> neighbor_points = regionQuery(points, i);
-                if (neighbor_points.size() < min_points_) {
-                    // Noise point
-                    continue;
-                }
-                // Expand cluster
-                clusters.push_back({});
-                cluster[i] = current_cluster;
-                clusters[current_cluster].push_back(points[i]);
-                for (size_t j = 0; j < neighbor_points.size(); ++j) {
-                    size_t neighbor_index = neighbor_points[j];
-                    if (!visited[neighbor_index]) {
-                        visited[neighbor_index] = true;
-                        std::vector<size_t> neighbor_neighbor_points = regionQuery(points, neighbor_index);
-                        if (neighbor_neighbor_points.size() >= min_points_) {
-                            neighbor_points.insert(neighbor_points.end(), neighbor_neighbor_points.begin(), neighbor_neighbor_points.end());
-                        }
-                    }
-                    if (cluster[neighbor_index] == -1) {
-                        cluster[neighbor_index] = current_cluster;
-                        clusters[current_cluster].push_back(points[neighbor_index]);
-                    }
-                }
-                current_cluster++;
+            if (grid_x >= 0 && grid_x < OG->info.width && grid_y >= 0 && grid_y < OG->info.height) {
+                // Update cell probability
+                int index = grid_y * OG->info.width + grid_x;
+                if (OG->data[index] < 100)
+                    OG->data[index] += increase_probability_; // Increase probability (up to 100)
             }
         }
 
-        RCLCPP_INFO(this->get_logger(), "Done clustering using DBSCAN");
-        return clusters;
-    }
-
-    std::vector<size_t> regionQuery(const std::vector<std::pair<double, double>>& points, size_t index) {
-        std::vector<size_t> neighbors;
-        for (size_t i = 0; i < points.size(); ++i) {
-            if (i != index) {
-                double distance = std::sqrt(std::pow(points[i].first - points[index].first, 2) +
-                                            std::pow(points[i].second - points[index].second, 2));
-                if (distance <= epsilon_) {
-                    neighbors.push_back(i);
-                }
-            }
-        }
-        return neighbors;
+        // Publish the updated occupancy map
+        updated_occupancy_map_publisher_->publish(*OG);
+        RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
     }
 
     std::vector<std::pair<double, double>> transformLidarPoints(const std::vector<std::pair<double, double>>& lidar_points,

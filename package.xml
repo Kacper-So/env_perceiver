@@ -1,21 +1,23 @@
 <?xml version="1.0"?>
-<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
-<package format="3">
+<package format="2">
   <name>ros2_obstacle_detection_on_occupancy_map</name>
-  <version>1.0.0</version>
-  <description>DESCRIPTION</description>
-  <maintainer email="kacper@gmail.com">kacper-so</maintainer>
+  <version>0.0.0</version>
+  <description>ROS 2 package for updating occupancy map using LiDAR data</description>
+  <maintainer email="kacper@gmail.com">kacper</maintainer>
   <license>Apache License 2.0</license>
 
-  <buildtool_depend>ament_cmake_auto</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>rclcpp</build_depend>
+  <build_depend>nav_msgs</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>pcl_conversions</build_depend>
+  <build_depend>pcl_ros</build_depend>
 
-  <depend>launch_ros</depend>
-  <depend>rclcpp</depend>
-  <depend>rclcpp_components</depend>
-
-  <test_depend>ament_cmake_ros</test_depend>
-  <test_depend>ament_lint_auto</test_depend>
-  <test_depend>ament_lint_common</test_depend>
+  <exec_depend>rclcpp</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>pcl_conversions</exec_depend>
+  <exec_depend>pcl_ros</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

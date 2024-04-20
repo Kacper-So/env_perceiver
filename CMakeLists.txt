@@ -1,37 +1,50 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.5)
 project(ros2_obstacle_detection_on_occupancy_map)
 
-find_package(ament_cmake_auto REQUIRED)
-ament_auto_find_build_dependencies()
+# Find dependencies
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(pcl_conversions REQUIRED)
+find_package(pcl_ros REQUIRED)
+find_package(PCL 1.10 REQUIRED)
 
-ament_auto_add_library(${PROJECT_NAME} SHARED
-  include/ros2_obstacle_detection_on_occupancy_map/ros2_obstacle_detection_on_occupancy_map.hpp
-  include/ros2_obstacle_detection_on_occupancy_map/visibility_control.hpp
-  src/ros2_obstacle_detection_on_occupancy_map.cpp
+# Add executable
+add_executable(occupancy_map_updater src/OccupancyMapUpdater.cpp)
+
+# Include directories for the target
+target_include_directories(occupancy_map_updater PRIVATE
+    ${rclcpp_INCLUDE_DIRS}
+    ${nav_msgs_INCLUDE_DIRS}
+    ${sensor_msgs_INCLUDE_DIRS}
+    ${pcl_conversions_INCLUDE_DIRS}
+    ${pcl_ros_INCLUDE_DIRS}
+    ${PCL_INCLUDE_DIRS}
 )
 
-ament_auto_add_library(${PROJECT_NAME}_node SHARED
-  include/ros2_obstacle_detection_on_occupancy_map/ros2_obstacle_detection_on_occupancy_map_node.hpp
-  src/ros2_obstacle_detection_on_occupancy_map_node.cpp
+# Link executable with PCL libraries
+target_link_libraries(occupancy_map_updater
+    ${PCL_LIBRARIES}
 )
 
-rclcpp_components_register_node(${PROJECT_NAME}_node
-  PLUGIN "ros2_obstacle_detection_on_occupancy_map::Ros2ObstacleDetectionOnOccupancyMapNode"
-  EXECUTABLE ${PROJECT_NAME}_node_exe
+# Link dependencies
+ament_target_dependencies(occupancy_map_updater
+    rclcpp
+    nav_msgs
+    sensor_msgs
+    pcl_conversions
+    pcl_ros
 )
 
-if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  ament_lint_auto_find_test_dependencies()
+# Install executable
+install(TARGETS occupancy_map_updater
+        DESTINATION lib/${PROJECT_NAME})
 
-  ament_add_ros_isolated_gtest(test_ros2_obstacle_detection_on_occupancy_map
-    test/test_ros2_obstacle_detection_on_occupancy_map.cpp
-  )
-  ament_target_dependencies(test_ros2_obstacle_detection_on_occupancy_map ${TEST_SOURCES})
-  target_link_libraries(test_ros2_obstacle_detection_on_occupancy_map ${PROJECT_NAME})
-endif()
-
-ament_auto_package(INSTALL_TO_SHARE
-  launch
-  config
+# Install launch files
+install(DIRECTORY
+        launch
+        DESTINATION share/${PROJECT_NAME}/
 )
+
+ament_package()

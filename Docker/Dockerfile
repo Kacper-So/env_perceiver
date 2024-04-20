@@ -4,7 +4,9 @@ FROM ros:foxy
 # Install necessary packages
 RUN apt-get update && apt-get install -y \
     git \
-    python3-pip
+    python3-pip \
+    ros-foxy-pcl-conversions \
+    ros-foxy-pcl-ros
 
 # Clone your ROS 2 package repository
 WORKDIR /workspace/src

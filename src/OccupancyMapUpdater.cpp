@@ -16,10 +16,10 @@ public:
         rclcpp::QoS qos(rclcpp::KeepLast(5)); // Example QoS settings
         qos.best_effort(); // Set the reliability to best effort
         lidar_subscriber_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
-            "/lidar", qos, std::bind(&OccupancyMapUpdater::lidarCallback, this, std::placeholders::_1));
+            "/sensing/lidar/scan", qos, std::bind(&OccupancyMapUpdater::lidarCallback, this, std::placeholders::_1));
 
         odometry_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>(
-            "/odom", 10, std::bind(&OccupancyMapUpdater::odometryCallback, this, std::placeholders::_1));
+            "/localization/kinematic_state", 10, std::bind(&OccupancyMapUpdater::odometryCallback, this, std::placeholders::_1));
 
         // Create publisher for updated occupancy map
         updated_occupancy_map_publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(

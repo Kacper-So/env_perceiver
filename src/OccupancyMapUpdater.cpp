@@ -31,7 +31,7 @@ public:
     }
 
 private:
-    nav_msgs::msg::OccupancyGrid OG;
+    nav_msgs::msg::OccupancyGrid OG = NULL;
     nav_msgs::msg::OccupancyGrid updated_OG;
     nav_msgs::msg::Odometry curr_odometry;
     double epsilon_;
@@ -57,40 +57,43 @@ private:
 
     void lidarCallback(const sensor_msgs::msg::LaserScan::SharedPtr lidar_msg) {
         RCLCPP_INFO(this->get_logger(), "Received LiDAR data");
-        
-        // Process LiDAR data
-        // Convert sensor_msgs::msg::LaserScan to vector of points
-        std::vector<std::pair<double, double>> points;
-        for (float angle = lidar_msg->angle_min; angle < lidar_msg->angle_max; angle += lidar_msg->angle_increment) {
-            double x = lidar_msg->range_min * cos(angle);
-            double y = lidar_msg->range_min * sin(angle);
-            points.push_back({x, y});
-        }
-        RCLCPP_INFO(this->get_logger(), "Number of LiDAR Points: %zu", points.size());
-
-        // Transform LiDAR points to map frame
-        std::vector<std::pair<double, double>> transformed_points = transformLidarPoints(points, curr_odometry);
-        RCLCPP_INFO(this->get_logger(), "Number of Transformed Points: %zu", transformed_points.size());
-
-        // Perform clustering using DBSCAN
-        std::vector<std::vector<std::pair<double, double>>> clusters = fbscan(transformed_points);
-        RCLCPP_INFO(this->get_logger(), "Number of Clusters: %zu", clusters.size());
-
-        // Update occupancy grid with clustered LiDAR data
-        updated_OG = OG;
-        for (const auto& cluster : clusters) {
-            for (const auto& point : cluster) {
-                // Convert point to grid cell coordinates
-                int grid_x = static_cast<int>((point.first - map_origin_x_) / map_resolution_);
-                int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
-
-                updated_OG.data[grid_y * map_width_ + grid_x] = 100; // Occupied cell
+        if(OG != NULL){
+            // Process LiDAR data
+            // Convert sensor_msgs::msg::LaserScan to vector of points
+            std::vector<std::pair<double, double>> points;
+            for (float angle = lidar_msg->angle_min; angle < lidar_msg->angle_max; angle += lidar_msg->angle_increment) {
+                double x = lidar_msg->range_min * cos(angle);
+                double y = lidar_msg->range_min * sin(angle);
+                points.push_back({x, y});
             }
-        }
+            RCLCPP_INFO(this->get_logger(), "Number of LiDAR Points: %zu", points.size());
 
-        // Publish the updated occupancy map
-        updated_occupancy_map_publisher_->publish(updated_OG);
-        RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
+            // Transform LiDAR points to map frame
+            std::vector<std::pair<double, double>> transformed_points = transformLidarPoints(points, curr_odometry);
+            RCLCPP_INFO(this->get_logger(), "Number of Transformed Points: %zu", transformed_points.size());
+
+            // Perform clustering using DBSCAN
+            std::vector<std::vector<std::pair<double, double>>> clusters = fbscan(transformed_points);
+            RCLCPP_INFO(this->get_logger(), "Number of Clusters: %zu", clusters.size());
+
+            // Update occupancy grid with clustered LiDAR data
+            updated_OG = OG;
+            for (const auto& cluster : clusters) {
+                for (const auto& point : cluster) {
+                    // Convert point to grid cell coordinates
+                    int grid_x = static_cast<int>((point.first - map_origin_x_) / map_resolution_);
+                    int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
+
+                    updated_OG.data[grid_y * map_width_ + grid_x] = 100; // Occupied cell
+                }
+            }
+
+            // Publish the updated occupancy map
+            updated_occupancy_map_publisher_->publish(updated_OG);
+            RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Occupancy grid not received yet");
+        }
     }
     
     void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg) {

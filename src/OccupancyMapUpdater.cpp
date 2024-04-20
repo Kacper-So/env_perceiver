@@ -82,7 +82,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "Number of Transformed Points: %zu", transformed_points.size());
 
         // Update occupancy grid with LiDAR data
-        updateOccupancyGrid(transformed_points, *lidar_msg);
+        updateOccupancyGrid(transformed_points);
     }
 
     void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg) {
@@ -91,10 +91,10 @@ private:
         curr_odometry = odometry_msg;
     }
 
-    void updateOccupancyGrid(const std::vector<std::pair<double, double>>& points, const sensor_msgs::msg::LaserScan& lidar_msg) {
+    void updateOccupancyGrid(const std::vector<std::pair<double, double>>& points) {
         // Update occupancy grid with LiDAR points
         for (const auto& point : points) {
-            // Convert LiDAR point to grid cell coordinates
+            // Convert point to grid cell coordinates
             int grid_x = static_cast<int>((point.first - map_origin_x_) / map_resolution_);
             int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
 
@@ -105,55 +105,21 @@ private:
                     OG->data[index] += increase_probability_; // Increase probability (up to 100)
                 else
                     OG->data[index] = 100; // Ensure it doesn't exceed 100
-                    
-                // Decrease probability in the zone visible to LiDAR
-                decreaseOccupancyInVisibleZone(grid_x, grid_y, point, lidar_msg);
+            }
+        }
+
+        // Decrease probability for other cells
+        for (int i = 0; i < OG->info.width * OG->info.height; ++i) {
+            if (OG->data[i] > 0) {
+                OG->data[i] -= decrease_probability_; // Decrease probability
+                if (OG->data[i] < 0)
+                    OG->data[i] = 0; // Ensure it doesn't go below 0
             }
         }
 
         // Publish the updated occupancy map
         updated_occupancy_map_publisher_->publish(*OG);
         RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
-    }
-
-    void decreaseOccupancyInVisibleZone(int grid_x, int grid_y, const std::pair<double, double>& point, const sensor_msgs::msg::LaserScan& lidar_msg) {
-        // Get LiDAR beam angle and maximum range
-        double angle = atan2(point.second, point.first);
-        double max_range = sqrt(pow(point.first, 2) + pow(point.second, 2));
-
-        // Iterate over grid cells within the zone visible to LiDAR
-        for (int x = 0; x < OG->info.width; ++x) {
-            for (int y = 0; y < OG->info.height; ++y) {
-                // Calculate distance and angle of each grid cell from LiDAR point
-                double cell_x = map_origin_x_ + x * map_resolution_;
-                double cell_y = map_origin_y_ + y * map_resolution_;
-                double distance = sqrt(pow(cell_x - point.first, 2) + pow(cell_y - point.second, 2));
-                double cell_angle = atan2(cell_y - point.second, cell_x - point.first);
-
-                // Check if the cell is within LiDAR range and angle
-                if (distance <= max_range && std::abs(cell_angle - angle) <= epsilon_) {
-                    // Decrease probability only if it's in lidar visible zone
-                    decreaseOccupancy(grid_x, grid_y, x, y, lidar_msg);
-                }
-            }
-        }
-    }
-
-    void decreaseOccupancy(int grid_x, int grid_y, int cell_x, int cell_y, const sensor_msgs::msg::LaserScan& lidar_msg) {
-        // Calculate the distance between grid cell and LiDAR point
-        double distance = sqrt(pow(cell_x - grid_x, 2) + pow(cell_y - grid_y, 2)) * map_resolution_;
-        
-        // Calculate corresponding index in LiDAR ranges
-        int range_index = static_cast<int>((distance - lidar_msg.range_min) / lidar_msg.angle_increment);
-
-        // Check if the cell is within LiDAR range and decrease probability
-        if (range_index >= 0 && range_index < static_cast<int>(lidar_msg.ranges.size()) &&
-            lidar_msg.ranges[range_index] > distance) {
-            int index = cell_y * OG->info.width + cell_x;
-            OG->data[index] -= decrease_probability_; // Decrease probability
-            if (OG->data[index] < 0)
-                OG->data[index] = 0; // Ensure it doesn't go below 0
-        }
     }
 
     std::vector<std::pair<double, double>> transformLidarPoints(const std::vector<std::pair<double, double>>& lidar_points,

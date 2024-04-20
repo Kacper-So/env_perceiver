@@ -13,12 +13,13 @@ public:
         // Subscribe to occupancy map, LiDAR, and odometry topics
         occupancy_map_subscriber_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
             "/map", 10, std::bind(&OccupancyMapUpdater::occupancyMapCallback, this, std::placeholders::_1));
-
+        rclcpp::QoS qos(rclcpp::KeepLast(10)); // Example QoS settings
+        qos.best_effort(); // Set the reliability to best effort
         lidar_subscriber_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
             "/lidar", 10, std::bind(&OccupancyMapUpdater::lidarCallback, this, std::placeholders::_1));
 
         odometry_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>(
-            "/odom", 10, std::bind(&OccupancyMapUpdater::odometryCallback, this, std::placeholders::_1));
+            "/odom", qos, std::bind(&OccupancyMapUpdater::odometryCallback, this, std::placeholders::_1));
 
         // Create publisher for updated occupancy map
         updated_occupancy_map_publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(

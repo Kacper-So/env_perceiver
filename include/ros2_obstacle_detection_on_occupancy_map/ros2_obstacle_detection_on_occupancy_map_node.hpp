@@ -17,6 +17,10 @@
 
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
+#include "nav_msgs/msg/occupancy_grid.hpp"
+#include "sensor_msgs/msg/laser_scan.hpp"
+#include "nav_msgs/msg/odometry.hpp"
+#include "geometry_msgs/msg/point.hpp"
 
 #include "ros2_obstacle_detection_on_occupancy_map/ros2_obstacle_detection_on_occupancy_map.hpp"
 
@@ -31,7 +35,17 @@ public:
 
 private:
   Ros2ObstacleDetectionOnOccupancyMapPtr ros2_obstacle_detection_on_occupancy_map_{nullptr};
-  int64_t param_name_{123};
+  void occupancyMapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
+  void lidarCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
+  void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+  void updateOccupancyMap();
+
+  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr occupancy_map_subscriber_;
+  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr lidar_subscriber_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_subscriber_;
+  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr occupancy_map_publisher_;
+
+  nav_msgs::msg::OccupancyGrid occupancy_map_;
 };
 }  // namespace ros2_obstacle_detection_on_occupancy_map
 

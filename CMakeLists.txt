@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.14)
 project(ros2_obstacle_detection_on_occupancy_map)
 
 # Find dependencies

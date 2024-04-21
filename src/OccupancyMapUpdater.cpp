@@ -4,6 +4,13 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include <cmath>
 #include "tf2_geometry_msgs/tf2_geometry_msgs.h"
+#include "sensor_msgs/msg/point_cloud.hpp"
+
+#include "sensor_msgs/msg/point_cloud2.hpp" // Include for PointCloud2 message
+#include "geometry_msgs/msg/point32.hpp"    // Include for Point32 message
+#include "pcl_conversions/pcl_conversions.h"
+#include "pcl/point_cloud.h"
+#include "pcl/point_types.h"
 
 using namespace std::chrono_literals;
 
@@ -23,6 +30,14 @@ public:
 
         updated_occupancy_map_publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(
             "/updated_map", 10);
+
+
+        lidar_points_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+            "/lidar_points", 10);
+        transformed_lidar_points_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+            "/transformed_lidar_points", 10);
+        car_position_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+            "/car_position", 10);
 
         epsilon_ = 3;  // Adjust epsilon according to your LiDAR sensor's resolution
         min_points_ = 5;  // Adjust min_points as needed
@@ -69,21 +84,29 @@ private:
             points.push_back({x, y});
         }
         //RCLCPP_INFO(this->get_logger(), "Number of LiDAR Points: %zu", points.size());
+        
+        // Publish LiDAR points
+        publishPointCloud(lidar_points_publisher_, points);
 
         // Transform LiDAR points to map frame
         std::vector<std::pair<double, double>> transformed_points = transformLidarPoints(points, *curr_odometry);
         //RCLCPP_INFO(this->get_logger(), "Number of Transformed Points: %zu", transformed_points.size());
 
+        // Publish transformed LiDAR points
+        publishPointCloud(transformed_lidar_points_publisher_, transformed_points);
+
+        std::vector<std::pair<double, double>> car_position = {{curr_odometry->pose.pose.position.x, curr_odometry->pose.pose.position.y}};
+        publishPointCloud(car_position_publisher_, car_position);
         // Perform clustering using DBSCAN
         std::vector<std::vector<std::pair<double, double>>> clusters = fbscan(transformed_points);
         RCLCPP_INFO(this->get_logger(), "Number of Clusters: %zu", clusters.size());
         // Debug print the coordinates of found clusters
-        for (size_t i = 0; i < clusters.size(); ++i) {
-            RCLCPP_INFO(this->get_logger(), "Cluster %zu:", i);
-            for (size_t j = 0; j < clusters[i].size(); ++j) {
-                RCLCPP_INFO(this->get_logger(), "    Point %zu: (%f, %f)", j, clusters[i][j].first, clusters[i][j].second);
-            }
-        }
+        // for (size_t i = 0; i < clusters.size(); ++i) {
+        //     RCLCPP_INFO(this->get_logger(), "Cluster %zu:", i);
+        //     for (size_t j = 0; j < clusters[i].size(); ++j) {
+        //         RCLCPP_INFO(this->get_logger(), "    Point %zu: (%f, %f)", j, clusters[i][j].first, clusters[i][j].second);
+        //     }
+        // }
         // Update occupancy grid with clustered LiDAR data
         updated_OG = *OG;
         for (const auto& cluster : clusters) {
@@ -195,11 +218,44 @@ private:
         return transformed_points;
     }
 
+    // Function to publish a point cloud
+    void publishPointCloud(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& publisher,
+                        const std::vector<std::pair<double, double>>& points) {
+        // Create a PCL PointCloud
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        
+        // Populate the PointCloud with points
+        for (const auto& point : points) {
+            pcl::PointXYZ pcl_point;
+            pcl_point.x = point.first;
+            pcl_point.y = point.second;
+            pcl_point.z = 0.0; // Adjust z value if needed
+            cloud->push_back(pcl_point);
+        }
+
+        // Convert PCL PointCloud to sensor_msgs::PointCloud2
+        sensor_msgs::msg::PointCloud2 output;
+        pcl::toROSMsg(*cloud, output);
+
+        // Set the frame ID and timestamp
+        output.header.frame_id = "map"; // Adjust frame ID if needed
+        output.header.stamp = this->now();
+
+        // Publish the PointCloud
+        publisher->publish(output);
+    }
+
+
     // ROS 2 subscriptions and publisher
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr occupancy_map_subscriber_;
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr lidar_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_subscriber_;
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr updated_occupancy_map_publisher_;
+
+    // ROS 2 publishers for point clouds
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_points_publisher_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr transformed_lidar_points_publisher_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr car_position_publisher_;
 };
 
 int main(int argc, char *argv[]) {

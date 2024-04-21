@@ -29,7 +29,6 @@ public:
         min_points_ = 5;  // Adjust min_points as needed
         increase_probability_ = 5; // Adjust probability increments as needed
         decrease_probability_ = 5; // Adjust probability decrements as needed
-        field_of_view_angle_ = M_PI / 60; // Set the field of view angle in radians (60 degrees)
     }
 
 private:
@@ -39,22 +38,23 @@ private:
     int min_points_;
     int increase_probability_;
     int decrease_probability_;
-    double field_of_view_angle_; // Field of view angle in radians
     float map_origin_x_;
     float map_origin_y_;
     float map_resolution_;
     float map_width_;
 
     void occupancyMapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr occupancy_map_msg) {
-        RCLCPP_INFO(this->get_logger(), "Received occupancy map");
-        OG = occupancy_map_msg;
-        map_origin_x_ = occupancy_map_msg->info.origin.position.x;
-        map_origin_y_ = occupancy_map_msg->info.origin.position.y;
-        map_resolution_ = occupancy_map_msg->info.resolution;
-        map_width_ = occupancy_map_msg->info.width;
-        RCLCPP_INFO(this->get_logger(), "Map Origin: (%f, %f)", map_origin_x_, map_origin_y_);
-        RCLCPP_INFO(this->get_logger(), "Map Resolution: %f", map_resolution_);
-        RCLCPP_INFO(this->get_logger(), "Map Width: %f", map_width_);
+        if(!OG){
+            RCLCPP_INFO(this->get_logger(), "Received occupancy map");
+            OG = occupancy_map_msg;
+            map_origin_x_ = occupancy_map_msg->info.origin.position.x;
+            map_origin_y_ = occupancy_map_msg->info.origin.position.y;
+            map_resolution_ = occupancy_map_msg->info.resolution;
+            map_width_ = occupancy_map_msg->info.width;
+            RCLCPP_INFO(this->get_logger(), "Map Origin: (%f, %f)", map_origin_x_, map_origin_y_);
+            RCLCPP_INFO(this->get_logger(), "Map Resolution: %f", map_resolution_);
+            RCLCPP_INFO(this->get_logger(), "Map Width: %f", map_width_);
+        }
     }
 
     void lidarCallback(const sensor_msgs::msg::LaserScan::SharedPtr lidar_msg) {
@@ -65,18 +65,24 @@ private:
             return;
         }
 
-        // Process LiDAR data
+        // Define the angular field of view in radians
+        double fov_min = -M_PI / 9;  // Example: -20 degrees
+        double fov_max = M_PI / 9;   // Example: 20 degrees
+
+        // Process LiDAR data within the defined field of view
         std::vector<std::pair<double, double>> points;
         for (size_t i = 0; i < lidar_msg->ranges.size(); ++i) {
             double angle = lidar_msg->angle_min + i * lidar_msg->angle_increment;
-            double range = lidar_msg->ranges[i];
-            if (range < lidar_msg->range_min || range > lidar_msg->range_max)
-                continue; // Skip invalid range
-            double x = range * cos(angle);
-            double y = range * sin(angle);
-            points.push_back({x, y});
+            if (angle >= fov_min && angle <= fov_max) {
+                double range = lidar_msg->ranges[i];
+                if (range < lidar_msg->range_min || range > lidar_msg->range_max)
+                    continue; // Skip invalid range
+                double x = range * cos(angle);
+                double y = range * sin(angle);
+                points.push_back({x, y});
+            }
         }
-        RCLCPP_INFO(this->get_logger(), "Number of LiDAR Points: %zu", points.size());
+        RCLCPP_INFO(this->get_logger(), "Number of LiDAR Points within FOV: %zu", points.size());
 
         // Transform LiDAR points to map frame
         std::vector<std::pair<double, double>> transformed_points = transformLidarPoints(points, *curr_odometry);
@@ -93,59 +99,36 @@ private:
     }
 
     void updateOccupancyGrid(const std::vector<std::pair<double, double>>& points) {
-        // Set to store grid cells updated by Lidar scan
-        std::unordered_set<int> updated_cells;
+    // Set to store grid cells updated by Lidar scan
+    std::unordered_set<int> updated_cells;
 
-        // Update occupancy grid with LiDAR points
-        for (const auto& point : points) {
-            // Convert point to grid cell coordinates
-            int grid_x = static_cast<int>((point.first - map_origin_x_) / map_resolution_);
-            int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
+    // Update occupancy grid with LiDAR points
+    for (const auto& point : points) {
+        // Convert point to grid cell coordinates
+        int grid_x = static_cast<int>((point.first - map_origin_x_) / map_resolution_);
+        int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
 
-            if (grid_x >= 0 && grid_x < OG->info.width && grid_y >= 0 && grid_y < OG->info.height) {
-                // Calculate angle between the robot and the point
-                double dx = point.first - curr_odometry->pose.pose.position.x;
-                double dy = point.second - curr_odometry->pose.pose.position.y;
-                double angle_to_point = std::atan2(dy, dx);
+        if (grid_x >= 0 && grid_x < OG->info.width && grid_y >= 0 && grid_y < OG->info.height) {
+            // Update cell probability
+            int index = grid_y * OG->info.width + grid_x;
+            OG->data[index] += increase_probability_; // Increase probability (up to 100)
+            OG->data[index] = std::min(static_cast<int>(OG->data[index]), 100); // Cap at 100
 
-                // Calculate angle difference between robot's orientation and angle to point
-                // Convert quaternion to Euler angles (roll, pitch, yaw)
-                tf2::Quaternion q;
-                tf2::fromMsg(curr_odometry->pose.pose.orientation, q);
-                double roll, pitch, yaw;
-                tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
-
-                // Calculate angle difference between robot's orientation and angle to point
-                double angle_diff = std::abs(yaw - angle_to_point);
-                // Ensure angle difference is within PI radians
-                angle_diff = std::min(angle_diff, 2 * M_PI - angle_diff);
-                // Check if the point is within the field of view angle of the robot
-                if (angle_diff <= field_of_view_angle_ / 2) {
-                    // Update cell probability
-                    int index = grid_y * OG->info.width + grid_x;
-                    OG->data[index] += increase_probability_; // Increase probability (up to 100)
-                    OG->data[index] = std::min(static_cast<int>(OG->data[index]), 100); // Cap at 100
-
-                    updated_cells.insert(index); // Add updated cell to the set
-                }
-            }
+            updated_cells.insert(index); // Add updated cell to the set
         }
-
-        // Decrease probability for other cells that have not been updated by Lidar scan
-        for (int y = 0; y < OG->info.height; ++y) {
-            for (int x = 0; x < OG->info.width; ++x) {
-                int index = y * OG->info.width + x;
-                if (updated_cells.find(index) == updated_cells.end()) {
-                    OG->data[index] -= decrease_probability_; // Decrease probability
-                    OG->data[index] = std::max(static_cast<int>(OG->data[index]), 0); // Cap at 0
-                }
-            }
-        }
-
-        // Publish the updated occupancy map
-        updated_occupancy_map_publisher_->publish(*OG);
-        RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
     }
+
+    // Decrease probability for other cells that have been updated by Lidar scan
+    for (int index : updated_cells) {
+        OG->data[index] -= decrease_probability_; // Decrease probability
+        OG->data[index] = std::max(static_cast<int>(OG->data[index]), 0); // Cap at 0
+
+    }
+
+    // Publish the updated occupancy map
+    updated_occupancy_map_publisher_->publish(*OG);
+    RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
+}
 
     std::vector<std::pair<double, double>> transformLidarPoints(const std::vector<std::pair<double, double>>& lidar_points,
                                                                 const nav_msgs::msg::Odometry& odometry_msg) {

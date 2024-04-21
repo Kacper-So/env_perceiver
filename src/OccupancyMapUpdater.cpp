@@ -77,7 +77,13 @@ private:
         // Perform clustering using DBSCAN
         std::vector<std::vector<std::pair<double, double>>> clusters = fbscan(transformed_points);
         RCLCPP_INFO(this->get_logger(), "Number of Clusters: %zu", clusters.size());
-
+        // Debug print the coordinates of found clusters
+        for (size_t i = 0; i < clusters.size(); ++i) {
+            RCLCPP_INFO(this->get_logger(), "Cluster %zu:", i);
+            for (size_t j = 0; j < clusters[i].size(); ++j) {
+                RCLCPP_INFO(this->get_logger(), "    Point %zu: (%f, %f)", j, clusters[i][j].first, clusters[i][j].second);
+            }
+        }
         // Update occupancy grid with clustered LiDAR data
         updated_OG = *OG;
         for (const auto& cluster : clusters) {

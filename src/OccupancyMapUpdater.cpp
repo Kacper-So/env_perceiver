@@ -4,6 +4,7 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include <cmath>
 #include "tf2_geometry_msgs/tf2_geometry_msgs.h"
+#include <unordered_set>
 
 using namespace std::chrono_literals;
 
@@ -28,6 +29,7 @@ public:
         min_points_ = 5;  // Adjust min_points as needed
         increase_probability_ = 5; // Adjust probability increments as needed
         decrease_probability_ = 5; // Adjust probability decrements as needed
+        forward_range_ = 20;
     }
 
 private:
@@ -37,6 +39,7 @@ private:
     int min_points_;
     int increase_probability_;
     int decrease_probability_;
+    int forward_range_;
     float map_origin_x_;
     float map_origin_y_;
     float map_resolution_;
@@ -90,36 +93,49 @@ private:
     }
 
     void updateOccupancyGrid(const std::vector<std::pair<double, double>>& points) {
-    // Set to store grid cells updated by Lidar scan
-    std::unordered_set<int> updated_cells;
+        // Set to store grid cells updated by Lidar scan
+        std::unordered_set<int> updated_cells;
 
-    // Update occupancy grid with LiDAR points
-    for (const auto& point : points) {
-        // Convert point to grid cell coordinates
-        int grid_x = static_cast<int>((point.first - map_origin_x_) / map_resolution_);
-        int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
+        // Update occupancy grid with LiDAR points
+        for (const auto& point : points) {
+            // Convert point to grid cell coordinates
+            int grid_x = static_cast<int>((point.first - map_origin_x_) / map_resolution_);
+            int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
 
-        if (grid_x >= 0 && grid_x < OG->info.width && grid_y >= 0 && grid_y < OG->info.height) {
-            // Update cell probability
-            int index = grid_y * OG->info.width + grid_x;
-            OG->data[index] += increase_probability_; // Increase probability (up to 100)
-            OG->data[index] = std::min(static_cast<int>(OG->data[index]), 100); // Cap at 100
+            if (grid_x >= 0 && grid_x < OG->info.width && grid_y >= 0 && grid_y < OG->info.height) {
+                // Calculate distance between the robot and the point
+                double distance = std::hypot(point.first - curr_odometry->pose.pose.position.x,
+                                            point.second - curr_odometry->pose.pose.position.y);
+                
+                // Check if the point is within the forward range of the robot
+                if (distance <= forward_range_) {
+                    // Update cell probability
+                    int index = grid_y * OG->info.width + grid_x;
+                    OG->data[index] += increase_probability_; // Increase probability (up to 100)
+                    OG->data[index] = std::min(static_cast<int>(OG->data[index]), 100); // Cap at 100
 
-            updated_cells.insert(index); // Add updated cell to the set
+                    updated_cells.insert(index); // Add updated cell to the set
+                }
+            }
         }
+
+        // Decrease probability for other cells that have not been updated by Lidar scan
+        for (int y = 0; y < OG->info.height; ++y) {
+            for (int x = 0; x < OG->info.width; ++x) {
+                int index = y * OG->info.width + x;
+                if (updated_cells.find(index) == updated_cells.end()) {
+                    OG->data[index] -= decrease_probability_; // Decrease probability
+                    OG->data[index] = std::max(static_cast<int>(OG->data[index]), 0); // Cap at 0
+                }
+            }
+        }
+
+        // Publish the updated occupancy map
+        updated_occupancy_map_publisher_->publish(*OG);
+        RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
     }
 
-    // Decrease probability for other cells that have been updated by Lidar scan
-    for (int index : updated_cells) {
-        OG->data[index] -= decrease_probability_; // Decrease probability
-        OG->data[index] = std::max(static_cast<int>(OG->data[index]), 0); // Cap at 0
 
-    }
-
-    // Publish the updated occupancy map
-    updated_occupancy_map_publisher_->publish(*OG);
-    RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
-}
 
     std::vector<std::pair<double, double>> transformLidarPoints(const std::vector<std::pair<double, double>>& lidar_points,
                                                                 const nav_msgs::msg::Odometry& odometry_msg) {

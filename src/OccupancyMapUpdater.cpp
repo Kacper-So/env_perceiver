@@ -39,7 +39,7 @@ public:
         car_position_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/car_position", 10);
 
-        epsilon_ = 3;  // Adjust epsilon according to your LiDAR sensor's resolution
+        epsilon_ = 0.2;  // Adjust epsilon according to your LiDAR sensor's resolution
         min_points_ = 5;  // Adjust min_points as needed
     }
 
@@ -104,6 +104,7 @@ private:
         // Perform clustering using DBSCAN
         std::vector<std::vector<std::pair<double, double>>> clusters = fbscan(transformed_points);
         RCLCPP_INFO(this->get_logger(), "Number of Clusters: %zu", clusters.size());
+
         // Debug print the coordinates of found clusters
         // for (size_t i = 0; i < clusters.size(); ++i) {
         //     RCLCPP_INFO(this->get_logger(), "Cluster %zu:", i);
@@ -184,6 +185,7 @@ private:
             if (i != index) {
                 double distance = std::sqrt(std::pow(points[i].first - points[index].first, 2) +
                                             std::pow(points[i].second - points[index].second, 2));
+                // RCLCPP_INFO(this->get_logger(), "Distance: %f", distance);
                 if (distance <= epsilon_) {
                     neighbors.push_back(i);
                 }

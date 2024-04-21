@@ -41,6 +41,8 @@ public:
 
         epsilon_ = 0.2;  // Adjust epsilon according to your LiDAR sensor's resolution
         min_points_ = 5;  // Adjust min_points as needed
+        min_fov = -3.14 / 6;
+        max_fov = 3.14 / 6;
     }
 
 private:
@@ -53,6 +55,8 @@ private:
     float map_origin_y_;
     float map_resolution_;
     float map_width_;
+    double min_fov;
+    double max_fov;
 
     void occupancyMapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr occupancy_map_msg) {
         if (!OG) {
@@ -80,6 +84,10 @@ private:
         std::vector<std::pair<double, double>> points;
         for (size_t i = 0; i < lidar_msg->ranges.size(); ++i) {
             double angle = lidar_msg->angle_min + i * lidar_msg->angle_increment;
+            // Check if the angle is within the field of view
+            if (angle < min_fov || angle > max_fov) {
+                continue; // Skip measurements outside of the field of view
+            }
             double range = lidar_msg->ranges[i];
             if (range < lidar_msg->range_min || range > lidar_msg->range_max)
                 continue; // Skip invalid range

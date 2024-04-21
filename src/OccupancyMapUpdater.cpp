@@ -78,9 +78,13 @@ private:
 
         // Process LiDAR data
         std::vector<std::pair<double, double>> points;
-        for (float angle = lidar_msg->angle_min; angle < lidar_msg->angle_max; angle += lidar_msg->angle_increment) {
-            double x = lidar_msg->range_min * cos(angle);
-            double y = lidar_msg->range_min * sin(angle);
+        for (size_t i = 0; i < lidar_msg->ranges.size(); ++i) {
+            double angle = lidar_msg->angle_min + i * lidar_msg->angle_increment;
+            double range = lidar_msg->ranges[i];
+            if (range < lidar_msg->range_min || range > lidar_msg->range_max)
+                continue; // Skip invalid range
+            double x = range * cos(angle);
+            double y = range * sin(angle);
             points.push_back({x, y});
         }
         //RCLCPP_INFO(this->get_logger(), "Number of LiDAR Points: %zu", points.size());

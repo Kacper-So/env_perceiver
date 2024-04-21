@@ -103,7 +103,8 @@ private:
             // Update cell probability
             int index = grid_y * OG->info.width + grid_x;
             OG->data[index] += increase_probability_; // Increase probability (up to 100)
-            OG->data[index] = std::min(OG->data[index], 100); // Cap at 100
+            OG->data[index] = std::min(static_cast<int>(OG->data[index]), 100); // Cap at 100
+
             updated_cells.insert(index); // Add updated cell to the set
         }
     }
@@ -111,7 +112,8 @@ private:
     // Decrease probability for other cells that have been updated by Lidar scan
     for (int index : updated_cells) {
         OG->data[index] -= decrease_probability_; // Decrease probability
-        OG->data[index] = std::max(OG->data[index], 0); // Cap at 0
+        OG->data[index] = std::max(static_cast<int>(OG->data[index]), 0); // Cap at 0
+
     }
 
     // Publish the updated occupancy map

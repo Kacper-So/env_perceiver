@@ -5,6 +5,7 @@
 #include <cmath>
 #include "tf2_geometry_msgs/tf2_geometry_msgs.h"
 #include <unordered_set>
+#include <unordered_map> // Include unordered_map header for density tracking
 
 using namespace std::chrono_literals;
 
@@ -27,7 +28,7 @@ public:
 
         epsilon_ = 0.2;  // Adjust epsilon according to your LiDAR sensor's resolution
         min_points_ = 5;  // Adjust min_points as needed
-        increase_probability_ = 5; // Adjust probability increments as needed
+        increase_probability_base_ = 5; // Base probability increment
         decrease_probability_ = 5; // Adjust probability decrements as needed
     }
 
@@ -36,12 +37,15 @@ private:
     nav_msgs::msg::Odometry::SharedPtr curr_odometry;
     double epsilon_;
     int min_points_;
-    int increase_probability_;
+    int increase_probability_base_;
     int decrease_probability_;
     float map_origin_x_;
     float map_origin_y_;
     float map_resolution_;
     float map_width_;
+
+    // Track density of points in each grid cell
+    std::unordered_map<int, int> point_density_;
 
     void occupancyMapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr occupancy_map_msg) {
         if(!OG){
@@ -66,8 +70,8 @@ private:
         }
 
         // Define the angular field of view in radians
-        double fov_min = -M_PI / 9;  // Example: -20 degrees
-        double fov_max = M_PI / 9;   // Example: 20 degrees
+        double fov_min = -M_PI / 6;  // Example: -30 degrees
+        double fov_max = M_PI / 6;   // Example: 30 degrees
 
         // Process LiDAR data within the defined field of view
         std::vector<std::pair<double, double>> points;
@@ -109,13 +113,18 @@ private:
             int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
 
             if (grid_x >= 0 && grid_x < OG->info.width && grid_y >= 0 && grid_y < OG->info.height) {
-                // Update cell probability
+                // Update point density for the grid cell
                 int index = grid_y * OG->info.width + grid_x;
-                OG->data[index] += increase_probability_; // Increase probability (up to 100)
-                OG->data[index] = std::min(static_cast<int>(OG->data[index]), 100); // Cap at 100
-
+                point_density_[index]++;
                 updated_cells.insert(index); // Add updated cell to the set
             }
+        }
+
+        // Increase probability based on point density
+        for (const auto& index : updated_cells) {
+            int increase_probability = increase_probability_base_ * point_density_[index];
+            OG->data[index] += increase_probability; // Increase probability
+            OG->data[index] = std::min(static_cast<int>(OG->data[index]), 100); // Cap at 100
         }
 
         // Decrease probability for other cells that have not been updated by Lidar scan

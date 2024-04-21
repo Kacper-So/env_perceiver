@@ -44,15 +44,17 @@ private:
     float map_width_;
 
     void occupancyMapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr occupancy_map_msg) {
-        RCLCPP_INFO(this->get_logger(), "Received occupancy map");
-        OG = occupancy_map_msg;
-        map_origin_x_ = occupancy_map_msg->info.origin.position.x;
-        map_origin_y_ = occupancy_map_msg->info.origin.position.y;
-        map_resolution_ = occupancy_map_msg->info.resolution;
-        map_width_ = occupancy_map_msg->info.width;
-        RCLCPP_INFO(this->get_logger(), "Map Origin: (%f, %f)", map_origin_x_, map_origin_y_);
-        RCLCPP_INFO(this->get_logger(), "Map Resolution: %f", map_resolution_);
-        RCLCPP_INFO(this->get_logger(), "Map Width: %f", map_width_);
+        if(!OG){
+            RCLCPP_INFO(this->get_logger(), "Received occupancy map");
+            OG = occupancy_map_msg;
+            map_origin_x_ = occupancy_map_msg->info.origin.position.x;
+            map_origin_y_ = occupancy_map_msg->info.origin.position.y;
+            map_resolution_ = occupancy_map_msg->info.resolution;
+            map_width_ = occupancy_map_msg->info.width;
+            RCLCPP_INFO(this->get_logger(), "Map Origin: (%f, %f)", map_origin_x_, map_origin_y_);
+            RCLCPP_INFO(this->get_logger(), "Map Resolution: %f", map_resolution_);
+            RCLCPP_INFO(this->get_logger(), "Map Width: %f", map_width_);
+        }
     }
 
     void lidarCallback(const sensor_msgs::msg::LaserScan::SharedPtr lidar_msg) {

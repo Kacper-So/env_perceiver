@@ -90,35 +90,34 @@ private:
     }
 
     void updateOccupancyGrid(const std::vector<std::pair<double, double>>& points) {
-        // Update occupancy grid with LiDAR points
-        for (const auto& point : points) {
-            // Convert point to grid cell coordinates
-            int grid_x = static_cast<int>((point.first - map_origin_x_) / map_resolution_);
-            int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
+    // Set to store grid cells updated by Lidar scan
+    std::unordered_set<int> updated_cells;
 
-            if (grid_x >= 0 && grid_x < OG->info.width && grid_y >= 0 && grid_y < OG->info.height) {
-                // Update cell probability
-                int index = grid_y * OG->info.width + grid_x;
-                if (OG->data[index] < 100)
-                    OG->data[index] += increase_probability_; // Increase probability (up to 100)
-                else
-                    OG->data[index] = 100; // Ensure it doesn't exceed 100
-            }
+    // Update occupancy grid with LiDAR points
+    for (const auto& point : points) {
+        // Convert point to grid cell coordinates
+        int grid_x = static_cast<int>((point.first - map_origin_x_) / map_resolution_);
+        int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
+
+        if (grid_x >= 0 && grid_x < OG->info.width && grid_y >= 0 && grid_y < OG->info.height) {
+            // Update cell probability
+            int index = grid_y * OG->info.width + grid_x;
+            OG->data[index] += increase_probability_; // Increase probability (up to 100)
+            OG->data[index] = std::min(OG->data[index], 100); // Cap at 100
+            updated_cells.insert(index); // Add updated cell to the set
         }
-
-        // Decrease probability for other cells
-        for (int i = 0; i < OG->info.width * OG->info.height; ++i) {
-            if (OG->data[i] > 0) {
-                OG->data[i] -= decrease_probability_; // Decrease probability
-                if (OG->data[i] < 0)
-                    OG->data[i] = 0; // Ensure it doesn't go below 0
-            }
-        }
-
-        // Publish the updated occupancy map
-        updated_occupancy_map_publisher_->publish(*OG);
-        RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
     }
+
+    // Decrease probability for other cells that have been updated by Lidar scan
+    for (int index : updated_cells) {
+        OG->data[index] -= decrease_probability_; // Decrease probability
+        OG->data[index] = std::max(OG->data[index], 0); // Cap at 0
+    }
+
+    // Publish the updated occupancy map
+    updated_occupancy_map_publisher_->publish(*OG);
+    RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
+}
 
     std::vector<std::pair<double, double>> transformLidarPoints(const std::vector<std::pair<double, double>>& lidar_points,
                                                                 const nav_msgs::msg::Odometry& odometry_msg) {

@@ -29,7 +29,7 @@ public:
         min_points_ = 5;  // Adjust min_points as needed
         increase_probability_ = 5; // Adjust probability increments as needed
         decrease_probability_ = 5; // Adjust probability decrements as needed
-        forward_range_ = 20;
+        field_of_view_angle_ = M_PI / 60; // Set the field of view angle in radians (60 degrees)
     }
 
 private:
@@ -39,7 +39,7 @@ private:
     int min_points_;
     int increase_probability_;
     int decrease_probability_;
-    int forward_range_;
+    double field_of_view_angle_; // Field of view angle in radians
     float map_origin_x_;
     float map_origin_y_;
     float map_resolution_;
@@ -103,12 +103,24 @@ private:
             int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
 
             if (grid_x >= 0 && grid_x < OG->info.width && grid_y >= 0 && grid_y < OG->info.height) {
-                // Calculate distance between the robot and the point
-                double distance = std::hypot(point.first - curr_odometry->pose.pose.position.x,
-                                            point.second - curr_odometry->pose.pose.position.y);
-                
-                // Check if the point is within the forward range of the robot
-                if (distance <= forward_range_) {
+                // Calculate angle between the robot and the point
+                double dx = point.first - curr_odometry->pose.pose.position.x;
+                double dy = point.second - curr_odometry->pose.pose.position.y;
+                double angle_to_point = std::atan2(dy, dx);
+
+                // Calculate angle difference between robot's orientation and angle to point
+                // Convert quaternion to Euler angles (roll, pitch, yaw)
+                tf2::Quaternion q;
+                tf2::fromMsg(curr_odometry->pose.pose.orientation, q);
+                double roll, pitch, yaw;
+                tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+
+                // Calculate angle difference between robot's orientation and angle to point
+                double angle_diff = std::abs(yaw - angle_to_point);
+                // Ensure angle difference is within PI radians
+                angle_diff = std::min(angle_diff, 2 * M_PI - angle_diff);
+                // Check if the point is within the field of view angle of the robot
+                if (angle_diff <= field_of_view_angle_ / 2) {
                     // Update cell probability
                     int index = grid_y * OG->info.width + grid_x;
                     OG->data[index] += increase_probability_; // Increase probability (up to 100)
@@ -134,8 +146,6 @@ private:
         updated_occupancy_map_publisher_->publish(*OG);
         RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
     }
-
-
 
     std::vector<std::pair<double, double>> transformLidarPoints(const std::vector<std::pair<double, double>>& lidar_points,
                                                                 const nav_msgs::msg::Odometry& odometry_msg) {

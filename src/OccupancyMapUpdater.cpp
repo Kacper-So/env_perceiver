@@ -5,14 +5,21 @@
 #include <cmath>
 #include "tf2_geometry_msgs/tf2_geometry_msgs.h"
 #include "sensor_msgs/msg/point_cloud.hpp"
-
+#include "std_msgs/msg/string.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp" // Include for PointCloud2 message
 #include "geometry_msgs/msg/point32.hpp"    // Include for Point32 message
 #include "pcl_conversions/pcl_conversions.h"
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
+#include "tf2/LinearMath/Matrix3x3.h"
+#include "tf2/utils.h"
 
 using namespace std::chrono_literals;
+
+enum class ClusterType {
+    OBSTACLE,
+    MAP_BORDER
+};
 
 class OccupancyMapUpdater : public rclcpp::Node {
 public:
@@ -31,14 +38,18 @@ public:
         updated_occupancy_map_publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(
             "/updated_map", 10);
 
-
         lidar_points_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/lidar_points", 10);
         transformed_lidar_points_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/transformed_lidar_points", 10);
         car_position_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/car_position", 10);
+        obstacle_detected_publisher_ = this->create_publisher<std_msgs::msg::String>("/obstacle_detected", 10);
+        obstacle_points_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/obstacle_points", 10);
+        obstacle_detection_iter_ = 0;
 
+        //parameters
+        obstacle_detection_threshold_ = 3; // Adjust the threshold as needed
         epsilon_ = 0.2;  // Adjust epsilon according to your LiDAR sensor's resolution
         min_points_ = 5;  // Adjust min_points as needed
         min_fov = -3.14 / 6;
@@ -50,6 +61,8 @@ private:
     nav_msgs::msg::OccupancyGrid updated_OG;
     nav_msgs::msg::Odometry::SharedPtr curr_odometry;
     double epsilon_;
+    int obstacle_detection_threshold_;
+    int obstacle_detection_iter_;
     int min_points_;
     float map_origin_x_;
     float map_origin_y_;
@@ -60,71 +73,48 @@ private:
 
     void occupancyMapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr occupancy_map_msg) {
         if (!OG) {
-            //RCLCPP_INFO(this->get_logger(), "Received occupancy map");
             OG = occupancy_map_msg;
             map_origin_x_ = occupancy_map_msg->info.origin.position.x;
             map_origin_y_ = occupancy_map_msg->info.origin.position.y;
             map_resolution_ = occupancy_map_msg->info.resolution;
             map_width_ = occupancy_map_msg->info.width;
-            //RCLCPP_INFO(this->get_logger(), "Map Origin: (%f, %f)", map_origin_x_, map_origin_y_);
-            //RCLCPP_INFO(this->get_logger(), "Map Resolution: %f", map_resolution_);
-            //RCLCPP_INFO(this->get_logger(), "Map Width: %f", map_width_);
         }
     }
 
     void lidarCallback(const sensor_msgs::msg::LaserScan::SharedPtr lidar_msg) {
-        //RCLCPP_INFO(this->get_logger(), "Received LiDAR data");
-
         if (!OG) {
-            //RCLCPP_INFO(this->get_logger(), "Occupancy grid not received yet");
             return;
         }
 
-        // Process LiDAR data
         std::vector<std::pair<double, double>> points;
         for (size_t i = 0; i < lidar_msg->ranges.size(); ++i) {
             double angle = lidar_msg->angle_min + i * lidar_msg->angle_increment;
-            // Check if the angle is within the field of view
             if (angle < min_fov || angle > max_fov) {
-                continue; // Skip measurements outside of the field of view
+                continue;
             }
             double range = lidar_msg->ranges[i];
             if (range < lidar_msg->range_min || range > lidar_msg->range_max)
-                continue; // Skip invalid range
+                continue;
             double x = range * cos(angle);
             double y = range * sin(angle);
             points.push_back({x, y});
         }
-        //RCLCPP_INFO(this->get_logger(), "Number of LiDAR Points: %zu", points.size());
-        
-        // Publish LiDAR points
+
         publishPointCloud(lidar_points_publisher_, points);
 
-        // Transform LiDAR points to map frame
         std::vector<std::pair<double, double>> transformed_points = transformLidarPoints(points, *curr_odometry);
-        //RCLCPP_INFO(this->get_logger(), "Number of Transformed Points: %zu", transformed_points.size());
 
-        // Publish transformed LiDAR points
         publishPointCloud(transformed_lidar_points_publisher_, transformed_points);
 
         std::vector<std::pair<double, double>> car_position = {{curr_odometry->pose.pose.position.x, curr_odometry->pose.pose.position.y}};
         publishPointCloud(car_position_publisher_, car_position);
-        // Perform clustering using DBSCAN
+
         std::vector<std::vector<std::pair<double, double>>> clusters = fbscan(transformed_points);
         RCLCPP_INFO(this->get_logger(), "Number of Clusters: %zu", clusters.size());
 
-        // Debug print the coordinates of found clusters
-        // for (size_t i = 0; i < clusters.size(); ++i) {
-        //     RCLCPP_INFO(this->get_logger(), "Cluster %zu:", i);
-        //     for (size_t j = 0; j < clusters[i].size(); ++j) {
-        //         RCLCPP_INFO(this->get_logger(), "    Point %zu: (%f, %f)", j, clusters[i][j].first, clusters[i][j].second);
-        //     }
-        // }
-        // Update occupancy grid with clustered LiDAR data
         updated_OG = *OG;
         for (const auto& cluster : clusters) {
             for (const auto& point : cluster) {
-                // Convert point to grid cell coordinates
                 int grid_x = static_cast<int>((point.first - map_origin_x_) / map_resolution_);
                 int grid_y = static_cast<int>((point.second - map_origin_y_) / map_resolution_);
 
@@ -134,20 +124,47 @@ private:
             }
         }
 
-        // Publish the updated occupancy map
+        for (const auto& cluster : clusters) {
+            bool is_obstacle = isClusterObstacle(cluster);
+            if (is_obstacle) {
+                publishPointCloud(obstacle_points_publisher_, cluster); // Publish obstacle clusters as PointCloud
+            }
+            if (is_obstacle) {
+                obstacle_detection_iter_++;
+                if (obstacle_detection_iter_ > obstacle_detection_threshold_) {
+                    std_msgs::msg::String msg;
+                    msg.data = "Obstacle detected!";
+                    obstacle_detected_publisher_->publish(msg);
+                    obstacle_detection_iter_ = 0;
+                }
+            }
+        }
+
         updated_occupancy_map_publisher_->publish(updated_OG);
-        //RCLCPP_INFO(this->get_logger(), "Published Updated Occupancy Map");
+    }
+
+    bool isClusterObstacle(const std::vector<std::pair<double, double>>& cluster) {
+        double centroid_x = 0.0, centroid_y = 0.0;
+        for (const auto& point : cluster) {
+            centroid_x += point.first;
+            centroid_y += point.second;
+        }
+        centroid_x /= cluster.size();
+        centroid_y /= cluster.size();
+
+        double angle_cluster_car = std::atan2(centroid_y - curr_odometry->pose.pose.position.y,
+                                              centroid_x - curr_odometry->pose.pose.position.x);
+        double car_orientation = tf2::getYaw(curr_odometry->pose.pose.orientation);
+        double angle_diff = std::abs(car_orientation - angle_cluster_car);
+
+        return angle_diff < (M_PI / 18); // Assuming perpendicular angle threshold as 45 degrees
     }
 
     void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg) {
-        //RCLCPP_INFO(this->get_logger(), "Received odometry data");
-
         curr_odometry = odometry_msg;
     }
 
     std::vector<std::vector<std::pair<double, double>>> fbscan(const std::vector<std::pair<double, double>>& points) {
-        //RCLCPP_INFO(this->get_logger(), "Performing clustering using DBSCAN");
-
         std::vector<std::vector<std::pair<double, double>>> clusters;
         std::vector<bool> visited(points.size(), false);
         std::vector<int> cluster(points.size(), -1);
@@ -158,10 +175,8 @@ private:
                 visited[i] = true;
                 std::vector<size_t> neighbor_points = regionQuery(points, i);
                 if (neighbor_points.size() < min_points_) {
-                    // Noise point
                     continue;
                 }
-                // Expand cluster
                 clusters.push_back({});
                 cluster[i] = current_cluster;
                 clusters[current_cluster].push_back(points[i]);
@@ -182,8 +197,6 @@ private:
                 current_cluster++;
             }
         }
-
-        //RCLCPP_INFO(this->get_logger(), "Done clustering using DBSCAN");
         return clusters;
     }
 
@@ -193,7 +206,6 @@ private:
             if (i != index) {
                 double distance = std::sqrt(std::pow(points[i].first - points[index].first, 2) +
                                             std::pow(points[i].second - points[index].second, 2));
-                // RCLCPP_INFO(this->get_logger(), "Distance: %f", distance);
                 if (distance <= epsilon_) {
                     neighbors.push_back(i);
                 }
@@ -204,41 +216,29 @@ private:
 
     std::vector<std::pair<double, double>> transformLidarPoints(const std::vector<std::pair<double, double>>& lidar_points,
                                                                 const nav_msgs::msg::Odometry& odometry_msg) {
-        //RCLCPP_INFO(this->get_logger(), "Transforming LiDAR points to map frame");
-
-        // Initialize transformed points vector
         std::vector<std::pair<double, double>> transformed_points;
 
-        // Extract robot's position from odometry message
         double robot_x = odometry_msg.pose.pose.position.x;
         double robot_y = odometry_msg.pose.pose.position.y;
 
-        // Extract robot's orientation from odometry message
         double roll, pitch, yaw;
         tf2::Quaternion quaternion;
         tf2::fromMsg(odometry_msg.pose.pose.orientation, quaternion);
         tf2::Matrix3x3(quaternion).getRPY(roll, pitch, yaw);
 
-        // Iterate through lidar points and transform each point to the map frame
         for (const auto& point : lidar_points) {
-            // Transform lidar point from robot frame to map frame
             double map_x = robot_x + cos(yaw) * point.first - sin(yaw) * point.second;
             double map_y = robot_y + sin(yaw) * point.first + cos(yaw) * point.second;
-
-            // Add transformed point to the vector
             transformed_points.push_back({map_x, map_y});
         }
 
         return transformed_points;
     }
 
-    // Function to publish a point cloud
     void publishPointCloud(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& publisher,
                         const std::vector<std::pair<double, double>>& points) {
-        // Create a PCL PointCloud
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
         
-        // Populate the PointCloud with points
         for (const auto& point : points) {
             pcl::PointXYZ pcl_point;
             pcl_point.x = point.first;
@@ -247,18 +247,14 @@ private:
             cloud->push_back(pcl_point);
         }
 
-        // Convert PCL PointCloud to sensor_msgs::PointCloud2
         sensor_msgs::msg::PointCloud2 output;
         pcl::toROSMsg(*cloud, output);
 
-        // Set the frame ID and timestamp
         output.header.frame_id = "map"; // Adjust frame ID if needed
         output.header.stamp = this->now();
 
-        // Publish the PointCloud
         publisher->publish(output);
     }
-
 
     // ROS 2 subscriptions and publisher
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr occupancy_map_subscriber_;
@@ -270,6 +266,8 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_points_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr transformed_lidar_points_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr car_position_publisher_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr obstacle_detected_publisher_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr obstacle_points_publisher_;
 };
 
 int main(int argc, char *argv[]) {

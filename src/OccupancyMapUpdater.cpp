@@ -13,6 +13,7 @@
 #include "pcl/point_types.h"
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2/utils.h"
+#include "autoware_auto_planning_msgs/msg/trajectory.hpp"
 
 using namespace std::chrono_literals;
 
@@ -40,16 +41,22 @@ public:
 
         lidar_points_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/lidar_points", 10);
+
         transformed_lidar_points_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/transformed_lidar_points", 10);
+
         car_position_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/car_position", 10);
+            
+        trajectory_subscriber_ = this->create_subscription<autoware_auto_planning_msgs::msg::Trajectory>(
+            "/planning/racing_planner/trajectory", 10, std::bind(&OccupancyMapUpdater::trajectoryCallback, this, std::placeholders::_1));
+
         obstacle_detected_publisher_ = this->create_publisher<std_msgs::msg::String>("/obstacle_detected", 10);
         obstacle_points_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/obstacle_points", 10);
         obstacle_detection_iter_ = 0;
 
         //parameters
-        obstacle_detection_threshold_ = 3; // Adjust the threshold as needed
+        obstacle_detection_threshold_ = 150; // Adjust the threshold as needed
         epsilon_ = 0.2;  // Adjust epsilon according to your LiDAR sensor's resolution
         min_points_ = 5;  // Adjust min_points as needed
         min_fov = -3.14 / 6;
@@ -60,6 +67,8 @@ private:
     nav_msgs::msg::OccupancyGrid::SharedPtr OG;
     nav_msgs::msg::OccupancyGrid updated_OG;
     nav_msgs::msg::Odometry::SharedPtr curr_odometry;
+    autoware_auto_planning_msgs::msg::Trajectory::SharedPtr curr_trajectory;
+    bool trajectory_loaded = false;
     double epsilon_;
     int obstacle_detection_threshold_;
     int obstacle_detection_iter_;
@@ -70,6 +79,14 @@ private:
     float map_width_;
     double min_fov;
     double max_fov;
+
+    void trajectoryCallback(const autoware_auto_planning_msgs::msg::Trajectory::SharedPtr trajectory_msg) {
+        if(!trajectory_loaded){
+            curr_trajectory = trajectory_msg;
+            trajectory_loaded = true;
+            //RCLCPP_INFO(this->get_logger(), curr_trajectory);
+        }
+    }
 
     void occupancyMapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr occupancy_map_msg) {
         if (!OG) {
@@ -156,8 +173,20 @@ private:
                                               centroid_x - curr_odometry->pose.pose.position.x);
         double car_orientation = tf2::getYaw(curr_odometry->pose.pose.orientation);
         double angle_diff = std::abs(car_orientation - angle_cluster_car);
+        if(angle_diff < (M_PI / 12)){
+            for (const auto& point : cluster) {
+                for (const auto& traj_point : curr_trajectory->points) {
+                    double dist = std::sqrt(std::pow(point.first - traj_point.pose.position.x, 2) +
+                                            std::pow(point.second - traj_point.pose.position.y, 2));
+                    if (dist < 0.05 ) { // Check if the cluster point is close to any trajectory point//epsilon_
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
 
-        return angle_diff < (M_PI / 18); // Assuming perpendicular angle threshold as 45 degrees
+        return false;
     }
 
     void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr odometry_msg) {
@@ -260,9 +289,10 @@ private:
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr occupancy_map_subscriber_;
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr lidar_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_subscriber_;
-    rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr updated_occupancy_map_publisher_;
+    rclcpp::Subscription<autoware_auto_planning_msgs::msg::Trajectory>::SharedPtr trajectory_subscriber_;
 
     // ROS 2 publishers for point clouds
+    rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr updated_occupancy_map_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_points_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr transformed_lidar_points_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr car_position_publisher_;

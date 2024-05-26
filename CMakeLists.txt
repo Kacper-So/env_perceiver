@@ -9,6 +9,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(PCL 1.10 REQUIRED)
+find_package(autoware_auto_planning_msgs REQUIRED)
 
 # Add executable
 add_executable(occupancy_map_updater src/OccupancyMapUpdater.cpp)
@@ -21,6 +22,7 @@ target_include_directories(occupancy_map_updater PRIVATE
     ${pcl_conversions_INCLUDE_DIRS}
     ${pcl_ros_INCLUDE_DIRS}
     ${PCL_INCLUDE_DIRS}
+    ${autoware_auto_planning_msgs_INCLUDE_DIRS}
 )
 
 # Link executable with PCL libraries
@@ -30,6 +32,7 @@ target_link_libraries(occupancy_map_updater
 
 # Link dependencies
 ament_target_dependencies(occupancy_map_updater
+    autoware_auto_planning_msgs
     rclcpp
     nav_msgs
     sensor_msgs

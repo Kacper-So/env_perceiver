@@ -14,45 +14,52 @@
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2/utils.h"
 #include "autoware_auto_planning_msgs/msg/trajectory.hpp"
+#include "autoware_auto_planning_msgs/msg/LaneletRoute.hpp"
+#include <vector>
+#include <tuple>
+#include <queue>
+#include <unordered_map>
 
 using namespace std::chrono_literals;
+
+struct Cell {
+    int x;
+    int y;
+    bool operator<(const Cell& other) const {
+        return std::tie(x, y) < std::tie(other.x, other.y);
+    }
+    bool operator==(const Cell& other) const {
+        return x == other.x && y == other.y;
+    }
+};
 
 enum class ClusterType {
     OBSTACLE,
     MAP_BORDER
 };
 
-class OccupancyMapUpdater : public rclcpp::Node {
+class EnvPerceiver : public rclcpp::Node {
 public:
-    OccupancyMapUpdater() : Node("occupancy_map_updater") {
+    EnvPerceiver() : Node("env_perceiver") {
         occupancy_map_subscriber_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
-            "/map", 10, std::bind(&OccupancyMapUpdater::occupancyMapCallback, this, std::placeholders::_1));
+            "/map", 10, std::bind(&EnvPerceiver::occupancyMapCallback, this, std::placeholders::_1));
         
         rclcpp::QoS qos(rclcpp::KeepLast(5)); // Example QoS settings
         qos.best_effort(); // Set the reliability to best effort
         lidar_subscriber_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
-            "/sensing/lidar/scan", qos, std::bind(&OccupancyMapUpdater::lidarCallback, this, std::placeholders::_1));
+            "/sensing/lidar/scan", qos, std::bind(&EnvPerceiver::lidarCallback, this, std::placeholders::_1));
 
         odometry_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>(
-            "/localization/kinematic_state", 10, std::bind(&OccupancyMapUpdater::odometryCallback, this, std::placeholders::_1));
+            "/localization/kinematic_state", 10, std::bind(&EnvPerceiver::odometryCallback, this, std::placeholders::_1));
 
         updated_occupancy_map_publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(
-            "/updated_map", 10);
+            "/local_occupancy_grid", 10);
 
-        lidar_points_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-            "/lidar_points", 10);
-
-        transformed_lidar_points_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-            "/transformed_lidar_points", 10);
-
-        car_position_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-            "/car_position", 10);
-            
         trajectory_subscriber_ = this->create_subscription<autoware_auto_planning_msgs::msg::Trajectory>(
-            "/planning/racing_planner/trajectory", 10, std::bind(&OccupancyMapUpdater::trajectoryCallback, this, std::placeholders::_1));
+            "/planning/racing_planner/trajectory", 10, std::bind(&EnvPerceiver::trajectoryCallback, this, std::placeholders::_1));
 
-        obstacle_detected_publisher_ = this->create_publisher<std_msgs::msg::String>("/obstacle_detected", 10);
-        obstacle_points_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/obstacle_points", 10);
+        start_end_publisher_ = this->create_publisher<autoware_auto_planning_msgs::msg::LaneletRoute>("/start_end", 10);
+        obstacle_detected_publisher_ = this->create_publisher<std_msgs::msg::String>("/obstacle_alarm", 10);
         obstacle_detection_iter_ = 0;
 
         //parameters
@@ -98,6 +105,156 @@ private:
         }
     }
 
+    void rotatePoint(int &x, int &y, double angle, int cx, int cy) {
+        // double rad = angle * M_PI / 180.0;
+        double rad = angle;
+        double cosAngle = std::cos(rad);
+        double sinAngle = std::sin(rad);
+        int nx = std::round(cosAngle * (x - cx) - sinAngle * (y - cy) + cx);
+        int ny = std::round(sinAngle * (x - cx) + cosAngle * (y - cy) + cy);
+        x = nx;
+        y = ny;
+    }
+
+    void limitToSquare(nav_msgs::msg::OccupancyGrid &grid, int square_size, std::pair<int, int> center_point) {
+        int width = grid.info.width;
+        int height = grid.info.height;
+
+        int half_size = square_size / 2;
+        int start_x = std::max(1, center_point.first);
+        int start_y = std::max(0, center_point.second - half_size);
+
+        // Ensure the square doesn't go out of bounds
+        if (start_x + square_size > width) {
+            start_x = width - square_size;
+        }
+        if (start_y + square_size > height) {
+            start_y = height - square_size;
+        }
+
+        std::vector<int8_t> new_data(square_size * square_size, 0);
+        int center_x = center_point.first;
+        int center_y = center_point.second;
+
+        for (int y = 0; y < square_size; ++y) {
+            for (int x = 0; x < square_size; ++x) {
+                int src_x = start_x + x;
+                int src_y = start_y + y;
+                rotatePoint(src_x, src_y, vehicle_state.phi, center_x, center_y);
+                
+                if (src_x >= 0 && src_x < width && src_y >= 0 && src_y < height) {
+                    new_data[y * square_size + x] = grid.data[src_y * width + src_x];
+                } else {
+                    new_data[y * square_size + x] = -1; // Unknown area, can set to -1 or any default value
+                }
+            }
+        }
+
+        grid.data = new_data;
+        grid.info.width = square_size;
+        grid.info.height = square_size;
+    }
+    
+    void fillOgGradient(nav_msgs::msg::OccupancyGrid &grid) {
+        int width = grid.info.width;
+        int height = grid.info.height;
+        auto &data = grid.data;
+        // Initialize distance grid with a large value
+        std::vector<std::vector<int>> distance_grid(height, std::vector<int>(width, std::numeric_limits<int>::max()));
+        // Create a queue for BFS
+        std::queue<Cell> q;
+        // Add all cells with value 100 to the queue and set their distance to 0
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                if (data[y * width + x] == 100) {
+                    q.push({x, y});
+                    distance_grid[y][x] = 0;
+                }
+            }
+        }
+        // Directions for moving in the grid (right, down, left, up)
+        std::vector<Cell> directions = {{1, 0}, {0, 1}, {-1, 0}, {0, -1}};
+        // Perform BFS
+        while (!q.empty()) {
+            Cell current = q.front();
+            q.pop();
+            int current_distance = distance_grid[current.y][current.x];
+
+            for (const Cell &dir : directions) {
+                int new_x = current.x + dir.x;
+                int new_y = current.y + dir.y;
+
+                // Check if the new cell is within the grid bounds
+                if (new_x >= 0 && new_x < width && new_y >= 0 && new_y < height) {
+                    // Update the distance if a shorter path is found
+                    if (distance_grid[new_y][new_x] > current_distance + 1) {
+                        distance_grid[new_y][new_x] = current_distance + 1;
+                        q.push({new_x, new_y});
+                    }
+                }
+            }
+        }
+        // Update the original grid with the calculated distances
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                if (data[y * width + x] == 0) {
+                    data[y * width + x] = 100 - distance_grid[y][x];
+                    if (data[y * width + x] < 0) {data[y * width + x] = 0;}
+                }
+            }
+        }
+        // Fill top and bottom borders
+        for (int x = 0; x < width; ++x){
+            data[x] = 100; // Top border
+            data[(height - 1) * width + x] = 100; // Bottom border
+        }
+        // Fill left and right borders
+        for (int y = 0; y < height; ++y){
+            data[y * width] = 100; // Left border
+            data[y * width + (width - 1)] = 100; // Right border
+        }
+    }
+    
+    void findBorderCells(nav_msgs::msg::OccupancyGrid &grid){
+        border.clear();
+        int width = grid.info.width;
+        int height = grid.info.height;
+        for (int y = 0; y < height; ++y){
+            for (int x = 0; x < width; ++x){
+                if (grid.data[y * width + x] == 100){
+                    geometry_msgs::msg::Point point;
+                    point.x = static_cast<double>(x) * grid.info.resolution + grid.info.origin.position.x;
+                    point.y = static_cast<double>(y) * grid.info.resolution + grid.info.origin.position.y;
+                    point.z = 0.0;
+                    border.push_back(point);
+                }
+            }
+        }
+    }
+    
+    Cell findEndPoint(const nav_msgs::msg::OccupancyGrid& OG, const Cell& start) {
+        int width = OG.info.width;
+        int height = OG.info.height;
+
+        // Define the "more distant part" as the farthest half of the map from the start point
+        int x_mid = (width / 2);
+
+        int min_value = std::numeric_limits<int>::max();
+        Cell end_point;
+
+        // Iterate over the "more distant part" of the map
+        for (int y = 0; y < height; ++y) {
+            for (int x = x_mid; x < width; ++x) {
+                int index = y * width + x;
+                if (OG.data[index] < min_value && OG.data[index] != -1) {
+                    min_value = OG.data[index];
+                    end_point = {x, y};
+                }
+            }
+        }
+        return end_point;
+    }
+
     void lidarCallback(const sensor_msgs::msg::LaserScan::SharedPtr lidar_msg) {
         if (!OG) {
             return;
@@ -116,19 +273,13 @@ private:
             double y = range * sin(angle);
             points.push_back({x, y});
         }
-
-        publishPointCloud(lidar_points_publisher_, points);
-
+        // publishPointCloud(lidar_points_publisher_, points);
         std::vector<std::pair<double, double>> transformed_points = transformLidarPoints(points, *curr_odometry);
-
-        publishPointCloud(transformed_lidar_points_publisher_, transformed_points);
-
+        // publishPointCloud(transformed_lidar_points_publisher_, transformed_points);
         std::vector<std::pair<double, double>> car_position = {{curr_odometry->pose.pose.position.x, curr_odometry->pose.pose.position.y}};
-        publishPointCloud(car_position_publisher_, car_position);
-
+        // publishPointCloud(car_position_publisher_, car_position);
         std::vector<std::vector<std::pair<double, double>>> clusters = fbscan(transformed_points);
-        RCLCPP_INFO(this->get_logger(), "Number of Clusters: %zu", clusters.size());
-
+        // RCLCPP_INFO(this->get_logger(), "Number of Clusters: %zu", clusters.size());
         updated_OG = *OG;
         for (const auto& cluster : clusters) {
             for (const auto& point : cluster) {
@@ -143,9 +294,9 @@ private:
 
         for (const auto& cluster : clusters) {
             bool is_obstacle = isClusterObstacle(cluster);
-            if (is_obstacle) {
-                publishPointCloud(obstacle_points_publisher_, cluster); // Publish obstacle clusters as PointCloud
-            }
+            // if (is_obstacle) {
+            //     publishPointCloud(obstacle_points_publisher_, cluster); // Publish obstacle clusters as PointCloud
+            // }
             if (is_obstacle) {
                 obstacle_detection_iter_++;
                 if (obstacle_detection_iter_ > obstacle_detection_threshold_) {
@@ -157,6 +308,71 @@ private:
             }
         }
 
+
+
+
+        double map_origin_x = updated_OG.info.origin.position.x;
+        double map_origin_y = updated_OG.info.origin.position.y;
+        double resolution = updated_OG.info.resolution;
+        int width = updated_OG.info.width;
+        int height = updated_OG.info.height;
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                int index = y * width + x;
+                if (updated_OG.data[index] != 0 && updated_OG.data[index] != -1) {
+                    updated_OG.data[index] = 100;
+                }
+            }
+        }
+        for (int y = 1; y < height - 1; ++y) {
+            for (int x = 1; x < width - 1; ++x) {
+                int index = y * width + x;
+                if (updated_OG.data[index] == 100) {
+                    bool border_only = true;
+                    // Check the 4 neighboring cells in the x/y plane
+                    int neighbors[4][2] = {{0, 1}, {1, 0}, {0, -1}, {-1, 0}};
+                    for (auto& n : neighbors) {
+                        int nx = x + n[0];
+                        int ny = y + n[1];
+                        int neighbor_index = ny * width + nx;
+                        if (updated_OG.data[neighbor_index] != 100 && updated_OG.data[neighbor_index] != -1) {
+                            border_only = false;
+                            break;
+                        }
+                    }
+                    if (border_only) {
+                        updated_OG.data[index] = -1;
+                    }
+                }
+            }
+        }
+
+        int grid_x = static_cast<int>((vehicle_state.X - map_origin_x) / resolution);
+        int grid_y = static_cast<int>((vehicle_state.Y - map_origin_y) / resolution);
+        std::pair<int, int> center_point = {grid_x, grid_y};
+        int square_size = 100;
+        limitToSquare(updated_OG, square_size, center_point);
+        map_origin_x = updated_OG.info.origin.position.x;
+        map_origin_y = updated_OG.info.origin.position.y;
+        resolution = updated_OG.info.resolution;
+        width = updated_OG.info.width;
+        fillOgGradient(updated_OG);
+        findBorderCells(updated_OG);
+        MPCC_Map_pub_->publish(updated_OG);
+        Cell start{1, square_size / 2};
+        Cell goal = findEndPoint(updated_OG, start);
+        autoware_auto_planning_msgs::msg::LaneletRoute msg_route;
+        geometry_msgs::msg::Pose start_gm;
+        geometry_msgs::msg::Pose goal_gm;
+        start_gm.position.x = start.x;
+        start_gm.position.y = start.y;
+        goal_gm.position.x = goal.x;
+        goal_gm.position.y = goal.y;
+        start_gm.orientation = curr_odometry->pose.pose.orientation;
+        goal_gm.orientation = curr_odometry->pose.pose.orientation;
+        msg_route.start_pose = start_gm;
+        msg_route.goal_pose = goal_gm;
+        start_end_publisher_->publish(msg_route);
         updated_occupancy_map_publisher_->publish(updated_OG);
     }
 
@@ -293,16 +509,17 @@ private:
 
     // ROS 2 publishers for point clouds
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr updated_occupancy_map_publisher_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_points_publisher_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr transformed_lidar_points_publisher_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr car_position_publisher_;
+    // rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_points_publisher_;
+    // rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr transformed_lidar_points_publisher_;
+    // rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr car_position_publisher_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr obstacle_detected_publisher_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr obstacle_points_publisher_;
+    rclcpp::Publisher<autoware_auto_planning_msgs::msg::LaneletRoute>::SharedPtr start_end_publisher_;
+    // rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr obstacle_points_publisher_;
 };
 
 int main(int argc, char *argv[]) {
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<OccupancyMapUpdater>();
+    auto node = std::make_shared<EnvPerceiver>();
     rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;

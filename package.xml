@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>ros2_obstacle_detection_on_occupancy_map</name>
+  <name>env_perceiver</name>
   <version>0.0.0</version>
   <description>ROS 2 package for updating occupancy map using LiDAR data</description>
   <maintainer email="kacper@gmail.com">kacper</maintainer>

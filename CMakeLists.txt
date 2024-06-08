@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(ros2_obstacle_detection_on_occupancy_map)
+project(env_perceiver)
 
 # Find dependencies
 find_package(ament_cmake REQUIRED)
@@ -12,10 +12,10 @@ find_package(PCL 1.10 REQUIRED)
 find_package(autoware_auto_planning_msgs REQUIRED)
 
 # Add executable
-add_executable(occupancy_map_updater src/OccupancyMapUpdater.cpp)
+add_executable(env_perceiver src/EnvPerceiver.cpp)
 
 # Include directories for the target
-target_include_directories(occupancy_map_updater PRIVATE
+target_include_directories(env_perceiver PRIVATE
     ${rclcpp_INCLUDE_DIRS}
     ${nav_msgs_INCLUDE_DIRS}
     ${sensor_msgs_INCLUDE_DIRS}
@@ -26,12 +26,12 @@ target_include_directories(occupancy_map_updater PRIVATE
 )
 
 # Link executable with PCL libraries
-target_link_libraries(occupancy_map_updater
+target_link_libraries(env_perceiver
     ${PCL_LIBRARIES}
 )
 
 # Link dependencies
-ament_target_dependencies(occupancy_map_updater
+ament_target_dependencies(env_perceiver
     autoware_auto_planning_msgs
     rclcpp
     nav_msgs
@@ -41,7 +41,7 @@ ament_target_dependencies(occupancy_map_updater
 )
 
 # Install executable
-install(TARGETS occupancy_map_updater
+install(TARGETS env_perceiver
         DESTINATION lib/${PROJECT_NAME})
 
 # Install launch files

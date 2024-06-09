@@ -14,7 +14,6 @@
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2/utils.h"
 #include "autoware_auto_planning_msgs/msg/trajectory.hpp"
-#include "autoware_auto_planning_msgs/msg/LaneletRoute.hpp"
 #include <vector>
 #include <tuple>
 #include <queue>
@@ -58,13 +57,19 @@ public:
         trajectory_subscriber_ = this->create_subscription<autoware_auto_planning_msgs::msg::Trajectory>(
             "/planning/racing_planner/trajectory", 10, std::bind(&EnvPerceiver::trajectoryCallback, this, std::placeholders::_1));
 
-        start_end_publisher_ = this->create_publisher<autoware_auto_planning_msgs::msg::LaneletRoute>("/start_end", 10);
+        start_publisher_ = this->create_publisher<geometry_msgs::msg::Pose>("/start_point", 10);
+        goal_publisher_ = this->create_publisher<geometry_msgs::msg::Pose>("/goal_point", 10);
         obstacle_detected_publisher_ = this->create_publisher<std_msgs::msg::String>("/obstacle_alarm", 10);
+        
+        start_pointcloud_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/start_pointcloud", 10);
+        goal_pointcloud_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/goal_pointcloud", 10);
+        border_pointcloud_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/border_pointcloud", 10);
+
         obstacle_detection_iter_ = 0;
 
         //parameters
         obstacle_detection_threshold_ = 150; // Adjust the threshold as needed
-        epsilon_ = 0.2;  // Adjust epsilon according to your LiDAR sensor's resolution
+        epsilon_ = 0.05;  // Adjust epsilon according to your LiDAR sensor's resolution
         min_points_ = 5;  // Adjust min_points as needed
         min_fov = -3.14 / 6;
         max_fov = 3.14 / 6;
@@ -86,6 +91,11 @@ private:
     float map_width_;
     double min_fov;
     double max_fov;
+    std::vector<geometry_msgs::msg::Point> border;
+    
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr start_pointcloud_publisher_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr goal_pointcloud_publisher_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr border_pointcloud_publisher_;
 
     void trajectoryCallback(const autoware_auto_planning_msgs::msg::Trajectory::SharedPtr trajectory_msg) {
         if(!trajectory_loaded){
@@ -121,7 +131,7 @@ private:
         int height = grid.info.height;
 
         int half_size = square_size / 2;
-        int start_x = std::max(1, center_point.first);
+        int start_x = std::max(10, center_point.first);
         int start_y = std::max(0, center_point.second - half_size);
 
         // Ensure the square doesn't go out of bounds
@@ -140,7 +150,7 @@ private:
             for (int x = 0; x < square_size; ++x) {
                 int src_x = start_x + x;
                 int src_y = start_y + y;
-                rotatePoint(src_x, src_y, vehicle_state.phi, center_x, center_y);
+                rotatePoint(src_x, src_y, tf2::getYaw(curr_odometry->pose.pose.orientation), center_x, center_y);
                 
                 if (src_x >= 0 && src_x < width && src_y >= 0 && src_y < height) {
                     new_data[y * square_size + x] = grid.data[src_y * width + src_x];
@@ -230,6 +240,7 @@ private:
                 }
             }
         }
+        publishPointCloud(border_pointcloud_publisher_, border);
     }
     
     Cell findEndPoint(const nav_msgs::msg::OccupancyGrid& OG, const Cell& start) {
@@ -273,13 +284,9 @@ private:
             double y = range * sin(angle);
             points.push_back({x, y});
         }
-        // publishPointCloud(lidar_points_publisher_, points);
         std::vector<std::pair<double, double>> transformed_points = transformLidarPoints(points, *curr_odometry);
-        // publishPointCloud(transformed_lidar_points_publisher_, transformed_points);
         std::vector<std::pair<double, double>> car_position = {{curr_odometry->pose.pose.position.x, curr_odometry->pose.pose.position.y}};
-        // publishPointCloud(car_position_publisher_, car_position);
         std::vector<std::vector<std::pair<double, double>>> clusters = fbscan(transformed_points);
-        // RCLCPP_INFO(this->get_logger(), "Number of Clusters: %zu", clusters.size());
         updated_OG = *OG;
         for (const auto& cluster : clusters) {
             for (const auto& point : cluster) {
@@ -294,9 +301,6 @@ private:
 
         for (const auto& cluster : clusters) {
             bool is_obstacle = isClusterObstacle(cluster);
-            // if (is_obstacle) {
-            //     publishPointCloud(obstacle_points_publisher_, cluster); // Publish obstacle clusters as PointCloud
-            // }
             if (is_obstacle) {
                 obstacle_detection_iter_++;
                 if (obstacle_detection_iter_ > obstacle_detection_threshold_) {
@@ -347,8 +351,8 @@ private:
             }
         }
 
-        int grid_x = static_cast<int>((vehicle_state.X - map_origin_x) / resolution);
-        int grid_y = static_cast<int>((vehicle_state.Y - map_origin_y) / resolution);
+        int grid_x = static_cast<int>((curr_odometry->pose.pose.position.x - map_origin_x) / resolution);
+        int grid_y = static_cast<int>((curr_odometry->pose.pose.position.y - map_origin_y) / resolution);
         std::pair<int, int> center_point = {grid_x, grid_y};
         int square_size = 100;
         limitToSquare(updated_OG, square_size, center_point);
@@ -358,21 +362,27 @@ private:
         width = updated_OG.info.width;
         fillOgGradient(updated_OG);
         findBorderCells(updated_OG);
-        MPCC_Map_pub_->publish(updated_OG);
-        Cell start{1, square_size / 2};
+        Cell start{10, square_size / 2};
         Cell goal = findEndPoint(updated_OG, start);
-        autoware_auto_planning_msgs::msg::LaneletRoute msg_route;
         geometry_msgs::msg::Pose start_gm;
         geometry_msgs::msg::Pose goal_gm;
-        start_gm.position.x = start.x;
-        start_gm.position.y = start.y;
-        goal_gm.position.x = goal.x;
-        goal_gm.position.y = goal.y;
+        start_gm.position.x = start.x * resolution + map_origin_x;
+        start_gm.position.y = start.y * resolution + map_origin_y;
+        goal_gm.position.x = goal.x * resolution + map_origin_x;
+        goal_gm.position.y = goal.y * resolution + map_origin_y;
+        // start_gm.position.x = start.x;
+        // start_gm.position.y = start.y;
+        // goal_gm.position.x = goal.x;
+        // goal_gm.position.y = goal.y;
         start_gm.orientation = curr_odometry->pose.pose.orientation;
         goal_gm.orientation = curr_odometry->pose.pose.orientation;
-        msg_route.start_pose = start_gm;
-        msg_route.goal_pose = goal_gm;
-        start_end_publisher_->publish(msg_route);
+        start_publisher_->publish(start_gm);
+        goal_publisher_->publish(goal_gm);
+
+        // Publish start and goal points as point clouds
+        publishSinglePointPointCloud(start_pointcloud_publisher_, start_gm.position);
+        publishSinglePointPointCloud(goal_pointcloud_publisher_, goal_gm.position);
+        
         updated_occupancy_map_publisher_->publish(updated_OG);
     }
 
@@ -394,7 +404,7 @@ private:
                 for (const auto& traj_point : curr_trajectory->points) {
                     double dist = std::sqrt(std::pow(point.first - traj_point.pose.position.x, 2) +
                                             std::pow(point.second - traj_point.pose.position.y, 2));
-                    if (dist < 0.05 ) { // Check if the cluster point is close to any trajectory point//epsilon_
+                    if (dist < epsilon_ ) { // Check if the cluster point is close to any trajectory point//epsilon_
                         return true;
                     }
                 }
@@ -481,16 +491,35 @@ private:
     }
 
     void publishPointCloud(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& publisher,
-                        const std::vector<std::pair<double, double>>& points) {
+                        const std::vector<geometry_msgs::msg::Point>& points) {
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
         
         for (const auto& point : points) {
             pcl::PointXYZ pcl_point;
-            pcl_point.x = point.first;
-            pcl_point.y = point.second;
-            pcl_point.z = 0.0; // Adjust z value if needed
+            pcl_point.x = point.x;
+            pcl_point.y = point.y;
+            pcl_point.z = point.z; // Adjust z value if needed
             cloud->push_back(pcl_point);
         }
+
+        sensor_msgs::msg::PointCloud2 output;
+        pcl::toROSMsg(*cloud, output);
+
+        output.header.frame_id = "map"; // Adjust frame ID if needed
+        output.header.stamp = this->now();
+
+        publisher->publish(output);
+    }
+
+    void publishSinglePointPointCloud(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& publisher,
+                                      const geometry_msgs::msg::Point& point) {
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        
+        pcl::PointXYZ pcl_point;
+        pcl_point.x = point.x;
+        pcl_point.y = point.y;
+        pcl_point.z = point.z; // Adjust z value if needed
+        cloud->push_back(pcl_point);
 
         sensor_msgs::msg::PointCloud2 output;
         pcl::toROSMsg(*cloud, output);
@@ -509,12 +538,10 @@ private:
 
     // ROS 2 publishers for point clouds
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr updated_occupancy_map_publisher_;
-    // rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_points_publisher_;
-    // rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr transformed_lidar_points_publisher_;
-    // rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr car_position_publisher_;
+
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr obstacle_detected_publisher_;
-    rclcpp::Publisher<autoware_auto_planning_msgs::msg::LaneletRoute>::SharedPtr start_end_publisher_;
-    // rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr obstacle_points_publisher_;
+    rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr start_publisher_;
+    rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr goal_publisher_;
 };
 
 int main(int argc, char *argv[]) {

@@ -8,6 +8,7 @@ find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(pcl_ros REQUIRED)
+find_package(autoware_cmake REQUIRED)
 find_package(PCL 1.10 REQUIRED)
 find_package(autoware_auto_planning_msgs REQUIRED)
 
@@ -24,6 +25,7 @@ target_include_directories(env_perceiver PRIVATE
     ${PCL_INCLUDE_DIRS}
     ${autoware_auto_planning_msgs_INCLUDE_DIRS}
 )
+
 
 # Link executable with PCL libraries
 target_link_libraries(env_perceiver
@@ -44,10 +46,5 @@ ament_target_dependencies(env_perceiver
 install(TARGETS env_perceiver
         DESTINATION lib/${PROJECT_NAME})
 
-# Install launch files
-install(DIRECTORY
-        launch
-        DESTINATION share/${PROJECT_NAME}/
-)
 
 ament_package()

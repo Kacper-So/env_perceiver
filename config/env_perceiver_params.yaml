@@ -1,0 +1,7 @@
+env_perceiver:
+  ros__parameters:
+    epsilon: 0.25
+    obstacle_detection_threshold: 20
+    min_points: 5
+    min_fov: -0.39269908169  # -PI/8
+    max_fov: 0.39269908169   # PI/8

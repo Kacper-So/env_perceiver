@@ -11,7 +11,9 @@ find_package(pcl_ros REQUIRED)
 find_package(autoware_cmake REQUIRED)
 find_package(PCL 1.10 REQUIRED)
 find_package(autoware_auto_planning_msgs REQUIRED)
-
+install(DIRECTORY launch/
+  DESTINATION share/${PROJECT_NAME}/launch
+)
 # Add executable
 add_executable(env_perceiver src/EnvPerceiver.cpp)
 
@@ -45,6 +47,4 @@ ament_target_dependencies(env_perceiver
 # Install executable
 install(TARGETS env_perceiver
         DESTINATION lib/${PROJECT_NAME})
-
-
 ament_package()

@@ -6,8 +6,8 @@
 #include "tf2_geometry_msgs/tf2_geometry_msgs.h"
 #include "sensor_msgs/msg/point_cloud.hpp"
 #include "std_msgs/msg/string.hpp"
-#include "sensor_msgs/msg/point_cloud2.hpp" // Include for PointCloud2 message
-#include "geometry_msgs/msg/point32.hpp"    // Include for Point32 message
+#include "sensor_msgs/msg/point_cloud2.hpp"
+#include "geometry_msgs/msg/point32.hpp"
 #include "pcl_conversions/pcl_conversions.h"
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
@@ -40,6 +40,18 @@ enum class ClusterType {
 class EnvPerceiver : public rclcpp::Node {
 public:
     EnvPerceiver() : Node("env_perceiver") {
+        this->declare_parameter<double>("epsilon", 0.05);
+        this->declare_parameter<int>("obstacle_detection_threshold", 150);
+        this->declare_parameter<int>("min_points", 5);
+        this->declare_parameter<double>("min_fov", -M_PI / 6);
+        this->declare_parameter<double>("max_fov", M_PI / 6);
+
+        epsilon_ = this->get_parameter("epsilon").as_double();
+        obstacle_detection_threshold_ = this->get_parameter("obstacle_detection_threshold").as_int();
+        min_points_ = this->get_parameter("min_points").as_int();
+        min_fov = this->get_parameter("min_fov").as_double();
+        max_fov = this->get_parameter("max_fov").as_double();
+
         occupancy_map_subscriber_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
             "/map", 10, std::bind(&EnvPerceiver::occupancyMapCallback, this, std::placeholders::_1));
         
@@ -66,13 +78,6 @@ public:
         border_pointcloud_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/border_pointcloud", 10);
 
         obstacle_detection_iter_ = 0;
-
-        //parameters
-        obstacle_detection_threshold_ = 150; // Adjust the threshold as needed
-        epsilon_ = 0.05;  // Adjust epsilon according to your LiDAR sensor's resolution
-        min_points_ = 5;  // Adjust min_points as needed
-        min_fov = -3.14 / 6;
-        max_fov = 3.14 / 6;
     }
 
 private:
@@ -101,7 +106,6 @@ private:
         if(!trajectory_loaded){
             curr_trajectory = trajectory_msg;
             trajectory_loaded = true;
-            //RCLCPP_INFO(this->get_logger(), curr_trajectory);
         }
     }
 
@@ -116,7 +120,6 @@ private:
     }
 
     void rotatePoint(int &x, int &y, double angle, int cx, int cy) {
-        // double rad = angle * M_PI / 180.0;
         double rad = angle;
         double cosAngle = std::cos(rad);
         double sinAngle = std::sin(rad);
@@ -247,15 +250,13 @@ private:
         int width = OG.info.width;
         int height = OG.info.height;
 
-        // Define the "more distant part" as the farthest half of the map from the start point
         int x_mid = (width / 2);
 
         int min_value = std::numeric_limits<int>::max();
         Cell end_point;
 
-        // Iterate over the "more distant part" of the map
         for (int y = 0; y < height; ++y) {
-            for (int x = x_mid; x < width; ++x) {
+            for (int x = x_mid; x < width - 10; ++x) {
                 int index = y * width + x;
                 if (OG.data[index] < min_value && OG.data[index] != -1) {
                     min_value = OG.data[index];
@@ -284,9 +285,13 @@ private:
             double y = range * sin(angle);
             points.push_back({x, y});
         }
+
         std::vector<std::pair<double, double>> transformed_points = transformLidarPoints(points, *curr_odometry);
+
         std::vector<std::pair<double, double>> car_position = {{curr_odometry->pose.pose.position.x, curr_odometry->pose.pose.position.y}};
+
         std::vector<std::vector<std::pair<double, double>>> clusters = fbscan(transformed_points);
+
         updated_OG = *OG;
         for (const auto& cluster : clusters) {
             for (const auto& point : cluster) {
@@ -311,9 +316,6 @@ private:
                 }
             }
         }
-
-
-
 
         double map_origin_x = updated_OG.info.origin.position.x;
         double map_origin_y = updated_OG.info.origin.position.y;
@@ -370,10 +372,6 @@ private:
         start_gm.position.y = start.y * resolution + map_origin_y;
         goal_gm.position.x = goal.x * resolution + map_origin_x;
         goal_gm.position.y = goal.y * resolution + map_origin_y;
-        // start_gm.position.x = start.x;
-        // start_gm.position.y = start.y;
-        // goal_gm.position.x = goal.x;
-        // goal_gm.position.y = goal.y;
         start_gm.orientation = curr_odometry->pose.pose.orientation;
         goal_gm.orientation = curr_odometry->pose.pose.orientation;
         start_publisher_->publish(start_gm);
@@ -399,7 +397,7 @@ private:
                                               centroid_x - curr_odometry->pose.pose.position.x);
         double car_orientation = tf2::getYaw(curr_odometry->pose.pose.orientation);
         double angle_diff = std::abs(car_orientation - angle_cluster_car);
-        if(angle_diff < (M_PI / 12)){
+        if(angle_diff < (M_PI / 16)){
             for (const auto& point : cluster) {
                 for (const auto& traj_point : curr_trajectory->points) {
                     double dist = std::sqrt(std::pow(point.first - traj_point.pose.position.x, 2) +

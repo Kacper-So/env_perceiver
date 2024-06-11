@@ -283,7 +283,7 @@ private:
                 continue;
             double x = range * cos(angle);
             double y = range * sin(angle);
-            points.push_back({x, y});
+            points.push_back({x + 0.35, y});
         }
 
         std::vector<std::pair<double, double>> transformed_points = transformLidarPoints(points, *curr_odometry);

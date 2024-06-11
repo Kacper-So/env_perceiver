@@ -58,16 +58,16 @@ public:
         rclcpp::QoS qos(rclcpp::KeepLast(5)); // Example QoS settings
         qos.best_effort(); // Set the reliability to best effort
         lidar_subscriber_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
-            "/sensing/lidar/scan", qos, std::bind(&EnvPerceiver::lidarCallback, this, std::placeholders::_1));
+            "/lidar", qos, std::bind(&EnvPerceiver::lidarCallback, this, std::placeholders::_1));
 
         odometry_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>(
-            "/localization/kinematic_state", 10, std::bind(&EnvPerceiver::odometryCallback, this, std::placeholders::_1));
+            "/odom", 10, std::bind(&EnvPerceiver::odometryCallback, this, std::placeholders::_1));
 
         updated_occupancy_map_publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(
             "/local_occupancy_grid", 10);
 
         trajectory_subscriber_ = this->create_subscription<autoware_auto_planning_msgs::msg::Trajectory>(
-            "/planning/racing_planner/trajectory", 10, std::bind(&EnvPerceiver::trajectoryCallback, this, std::placeholders::_1));
+            "/traj", 10, std::bind(&EnvPerceiver::trajectoryCallback, this, std::placeholders::_1));
 
         start_publisher_ = this->create_publisher<geometry_msgs::msg::Pose>("/start_point", 10);
         goal_publisher_ = this->create_publisher<geometry_msgs::msg::Pose>("/goal_point", 10);
